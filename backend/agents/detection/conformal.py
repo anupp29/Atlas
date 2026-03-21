@@ -89,6 +89,11 @@ class ConformalPredictor:
         """
         Compute the conformal threshold and empirical coverage from the calibration set.
 
+        Uses a held-out split: the first 80% of samples build the nonconformity
+        distribution; the remaining 20% are used to measure empirical coverage.
+        This prevents the data-leakage bug where computing the threshold on the
+        same data used to evaluate it always produces near-perfect coverage.
+
         Returns:
             (threshold, empirical_coverage)
         """
@@ -99,16 +104,23 @@ class ConformalPredictor:
             )
 
         scores = np.array(self._calibration_scores, dtype=float)
-        # Nonconformity score: how anomalous is each calibration point?
-        # For normal data, higher combined score = higher nonconformity
-        nonconformity = scores  # combined score IS the nonconformity measure
 
-        # Conformal threshold: the (1 - alpha) quantile of nonconformity scores
+        # 80/20 split — first 80% set the threshold, last 20% measure coverage
+        split = max(int(len(scores) * 0.8), 1)
+        train_scores = scores[:split]
+        test_scores = scores[split:]
+
+        # Conformal threshold: the (1 - alpha) quantile of the training nonconformity scores
         alpha = 1.0 - confidence_level
-        threshold = float(np.quantile(nonconformity, 1.0 - alpha))
+        threshold = float(np.quantile(train_scores, 1.0 - alpha))
 
-        # Empirical coverage: fraction of calibration points below threshold
-        empirical_coverage = float(np.mean(nonconformity <= threshold))
+        # Empirical coverage: fraction of held-out points correctly classified as normal
+        # (i.e. below the threshold — they ARE normal calibration points)
+        if len(test_scores) > 0:
+            empirical_coverage = float(np.mean(test_scores <= threshold))
+        else:
+            # Degenerate case: not enough data for a test split — use training coverage
+            empirical_coverage = float(np.mean(train_scores <= threshold))
 
         return threshold, empirical_coverage
 

@@ -348,7 +348,9 @@ def _maybe_update_adjusted_default(
     If so, compute the adjusted value (bounded at ±50%) and upsert into parameter_defaults.
     """
     with _get_connection() as conn:
-        # Get the most recent diffs for this parameter
+        # Read and write in a single connection so both operations are atomic.
+        # A crash between a separate read-conn and write-conn would leave diffs
+        # recorded but the default never updated (or vice versa).
         cursor = conn.execute(
             """
             SELECT direction, engineer_value
@@ -361,37 +363,36 @@ def _maybe_update_adjusted_default(
         )
         recent_diffs = cursor.fetchall()
 
-    if len(recent_diffs) < _DIFF_THRESHOLD:
-        return
+        if len(recent_diffs) < _DIFF_THRESHOLD:
+            return
 
-    # Check if all recent diffs are in the same direction
-    directions = [d["direction"] for d in recent_diffs]
-    if len(set(directions)) != 1:
-        return  # Mixed directions — no adjustment
+        # Check if all recent diffs are in the same direction
+        directions = [d["direction"] for d in recent_diffs]
+        if len(set(directions)) != 1:
+            return  # Mixed directions — no adjustment
 
-    direction = directions[0]
-    values = [float(d["engineer_value"]) for d in recent_diffs]
-    adjusted_value = sum(values) / len(values)  # Mean of engineer-preferred values
+        direction = directions[0]
+        values = [float(d["engineer_value"]) for d in recent_diffs]
+        adjusted_value = sum(values) / len(values)  # Mean of engineer-preferred values
 
-    # Enforce ±50% bound from playbook default
-    if default_float != 0:
-        max_allowed = default_float * (1 + _MAX_ADJUSTMENT_FACTOR)
-        min_allowed = default_float * (1 - _MAX_ADJUSTMENT_FACTOR)
-    else:
-        max_allowed = _MAX_ADJUSTMENT_FACTOR
-        min_allowed = -_MAX_ADJUSTMENT_FACTOR
+        # Enforce ±50% bound from playbook default
+        if default_float != 0:
+            max_allowed = default_float * (1 + _MAX_ADJUSTMENT_FACTOR)
+            min_allowed = default_float * (1 - _MAX_ADJUSTMENT_FACTOR)
+        else:
+            max_allowed = _MAX_ADJUSTMENT_FACTOR
+            min_allowed = -_MAX_ADJUSTMENT_FACTOR
 
-    human_review_flagged = False
-    if adjusted_value > max_allowed:
-        adjusted_value = max_allowed
-        human_review_flagged = True
-    elif adjusted_value < min_allowed:
-        adjusted_value = min_allowed
-        human_review_flagged = True
+        human_review_flagged = False
+        if adjusted_value > max_allowed:
+            adjusted_value = max_allowed
+            human_review_flagged = True
+        elif adjusted_value < min_allowed:
+            adjusted_value = min_allowed
+            human_review_flagged = True
 
-    now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
-    with _get_connection() as conn:
         conn.execute(
             """
             INSERT INTO parameter_defaults (

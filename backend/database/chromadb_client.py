@@ -127,8 +127,11 @@ class ChromaDBClient:
         output: list[dict] = []
         for i, doc_id in enumerate(results["ids"][0]):
             distance = results["distances"][0][i]
-            # ChromaDB returns L2 distance for local embeddings; convert to similarity
-            similarity = max(0.0, 1.0 - distance)
+            # ChromaDB with ONNXMiniLM returns cosine distance in [0, 2].
+            # Cosine similarity = 1 - cosine_distance, clamped to [0, 1].
+            # A distance of 0 = identical vectors (similarity 1.0).
+            # A distance of 2 = maximally opposite (similarity 0.0, clamped).
+            similarity = max(0.0, min(1.0, 1.0 - distance))
             meta = results["metadatas"][0][i] if results["metadatas"] else {}
             output.append({
                 "incident_id": doc_id,
@@ -194,7 +197,8 @@ class ChromaDBClient:
 
                 for i, doc_id in enumerate(col_results["ids"][0]):
                     distance = col_results["distances"][0][i]
-                    similarity = max(0.0, 1.0 - distance)
+                    # Same cosine distance → similarity conversion as similarity_search
+                    similarity = max(0.0, min(1.0, 1.0 - distance))
                     meta = col_results["metadatas"][0][i] if col_results["metadatas"] else {}
                     # Strip all client-identifying metadata
                     anonymised_meta = {

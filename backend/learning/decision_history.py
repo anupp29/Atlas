@@ -241,12 +241,35 @@ def get_accuracy_rate(
     if not records:
         return 0.50, 0
 
+    # Identify incident_ids that have a recurrence correction record.
+    # A correction record's rejection_reason starts with "recurrence_correction_for_record_".
+    # The original record for those incidents must NOT count as a success — the fix did not hold.
+    recurred_incident_ids: set[str] = {
+        r["incident_id"]
+        for r in records
+        if isinstance(r.get("rejection_reason"), str)
+        and r["rejection_reason"].startswith("recurrence_correction_for_record_")
+    }
+
+    # Exclude correction records themselves from the count — they are metadata, not decisions.
+    decision_records = [
+        r for r in records
+        if not (
+            isinstance(r.get("rejection_reason"), str)
+            and r["rejection_reason"].startswith("recurrence_correction_for_record_")
+        )
+    ]
+
+    if not decision_records:
+        return 0.50, 0
+
     successes = sum(
-        1 for r in records
+        1 for r in decision_records
         if r.get("resolution_outcome") == "success"
         and not r.get("recurrence_within_48h", False)
+        and r["incident_id"] not in recurred_incident_ids
     )
-    rate = successes / len(records)
+    rate = successes / len(decision_records)
     logger.debug(
         "decision_history.accuracy_rate_calculated",
         client_id=client_id,
@@ -254,19 +277,22 @@ def get_accuracy_rate(
         service_class=service_class,
         action_id=action_id,
         rate=round(rate, 4),
-        record_count=len(records),
+        record_count=len(decision_records),
         successes=successes,
     )
-    return rate, len(records)
+    return rate, len(decision_records)
 
 
 def mark_recurrence(incident_id: str, client_id: str) -> None:
     """
-    Mark the original resolution as recurrence_within_48h=True.
+    Record that the original resolution recurred within 48 hours.
     Called 48 hours after resolution if the same pattern reappears.
 
-    This retroactively counts the original resolution as a failure for
-    accuracy scoring purposes — the fix did not hold.
+    IMMUTABILITY CONTRACT: The original record is never mutated.
+    Instead, a correction record is inserted with human_action='escalated',
+    resolution_outcome='failure', and recurrence_within_48h=True.
+    This preserves the full audit trail while correctly penalising the
+    original resolution in accuracy scoring.
 
     Args:
         incident_id: The original incident ID.
@@ -275,23 +301,67 @@ def mark_recurrence(incident_id: str, client_id: str) -> None:
     if not client_id:
         raise ValueError("client_id is required for mark_recurrence.")
 
+    # Fetch the original record to copy its pattern fields
     with _get_connection() as conn:
         cursor = conn.execute(
             """
-            UPDATE decision_history
-            SET recurrence_within_48h = 1
+            SELECT * FROM decision_history
             WHERE incident_id = ? AND client_id = ?
+            ORDER BY timestamp ASC
+            LIMIT 1
             """,
             (incident_id, client_id),
         )
+        original = cursor.fetchone()
+
+    if original is None:
+        logger.warning(
+            "decision_history.recurrence_original_not_found",
+            incident_id=incident_id,
+            client_id=client_id,
+        )
+        return
+
+    original = dict(original)
+    correction_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Insert a correction record — original is untouched
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO decision_history (
+                record_id, client_id, incident_id, anomaly_type, service_class,
+                recommended_action_id, confidence_score_at_decision, routing_tier,
+                human_action, modification_diff, rejection_reason, resolution_outcome,
+                actual_mttr, recurrence_within_48h, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                correction_id,
+                client_id,
+                incident_id,
+                original["anomaly_type"],
+                original["service_class"],
+                original["recommended_action_id"],
+                original["confidence_score_at_decision"],
+                original["routing_tier"],
+                "escalated",   # correction action
+                None,
+                f"recurrence_correction_for_record_{original['record_id']}",
+                "failure",     # recurrence = the fix did not hold
+                original["actual_mttr"],
+                1,             # recurrence_within_48h = True
+                now,
+            ),
+        )
         conn.commit()
-        rows_affected = cursor.rowcount
 
     logger.info(
-        "decision_history.recurrence_marked",
-        incident_id=incident_id,
+        "decision_history.recurrence_correction_inserted",
+        original_incident_id=incident_id,
+        correction_record_id=correction_id,
         client_id=client_id,
-        rows_affected=rows_affected,
     )
 
 

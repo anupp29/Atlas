@@ -80,10 +80,16 @@ class CorrelationEngine:
         # Per-client buffer: client_id → list of (EvidencePackage, arrival_time)
         self._window: dict[str, list[tuple[EvidencePackage, float]]] = {}
         self._window_lock: dict[str, asyncio.Lock] = {}
+        # Single lock to guard creation of per-client locks (prevents double-init race)
+        self._lock_creation_lock = asyncio.Lock()
 
-    def _get_lock(self, client_id: str) -> asyncio.Lock:
+    async def _get_lock(self, client_id: str) -> asyncio.Lock:
+        """Return the per-client asyncio.Lock, creating it atomically if needed."""
         if client_id not in self._window_lock:
-            self._window_lock[client_id] = asyncio.Lock()
+            async with self._lock_creation_lock:
+                # Double-checked: another coroutine may have created it while we waited
+                if client_id not in self._window_lock:
+                    self._window_lock[client_id] = asyncio.Lock()
         return self._window_lock[client_id]
 
     async def ingest_evidence(self, pkg: EvidencePackage) -> CorrelatedIncident | None:
@@ -105,7 +111,7 @@ class CorrelationEngine:
             raise ValueError("EvidencePackage has no client_id — cannot correlate.")
 
         client_id = pkg.client_id
-        async with self._get_lock(client_id):
+        async with await self._get_lock(client_id):
             now = time.monotonic()
 
             if client_id not in self._window:
@@ -143,7 +149,7 @@ class CorrelationEngine:
         Returns:
             CorrelatedIncident with ISOLATED_ANOMALY for each package, or None if empty.
         """
-        async with self._get_lock(client_id):
+        async with await self._get_lock(client_id):
             if not self._window.get(client_id):
                 return None
 

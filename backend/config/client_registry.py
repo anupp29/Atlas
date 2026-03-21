@@ -92,6 +92,12 @@ def update_trust_level(client_id: str, new_level: int, sdm_confirmed_by: str) ->
         raise ValueError("SDM confirmation is required to update trust level.")
 
     current = _REGISTRY[client_id]["trust_level"]
+    if new_level < current:
+        raise ValueError(
+            f"Trust level downgrade is not permitted without explicit override. "
+            f"Client '{client_id}' is at level {current}, requested level {new_level}. "
+            "If a downgrade is intentional (e.g. compliance incident), contact the platform team."
+        )
     _REGISTRY[client_id]["trust_level"] = new_level
     logger.info(
         "client_registry.trust_level_updated",

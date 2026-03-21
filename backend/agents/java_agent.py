@@ -140,6 +140,16 @@ class JavaAgent(BaseAgent):
         if len(self._error_rate_window[service_name]) > 60:
             self._error_rate_window[service_name] = self._error_rate_window[service_name][-60:]
 
+        # Extract response time from event if present (e.g. from OTel span duration_ms)
+        duration_ms = event.get("duration_ms") or event.get("response_time_ms")
+        if duration_ms is not None:
+            try:
+                self._response_time_window[service_name].append(float(duration_ms))
+                if len(self._response_time_window[service_name]) > 200:
+                    self._response_time_window[service_name] = self._response_time_window[service_name][-200:]
+            except (TypeError, ValueError):
+                pass
+
         # Update seasonal baseline with error rate
         error_rate = sum(self._error_rate_window[service_name]) / max(len(self._error_rate_window[service_name]), 1)
         ts = event.get("timestamp")
@@ -314,18 +324,35 @@ class JavaAgent(BaseAgent):
         return pkg
 
     def _build_observation(self, service_name: str) -> dict[str, float]:
-        """Build the feature observation dict for the Isolation Forest."""
+        """
+        Build the feature observation dict for the Isolation Forest.
+        All features are derived from the rolling windows maintained per service.
+        """
         error_window = self._error_rate_window.get(service_name, [])
         error_rate = sum(error_window) / max(len(error_window), 1)
+
+        response_window = self._response_time_window.get(service_name, [])
+        response_p95 = float(sorted(response_window)[int(len(response_window) * 0.95)]) if len(response_window) >= 20 else 0.0
+
+        # Error code frequency: count occurrences of each critical pattern in the log buffer
+        log_buf = self._log_buffer.get(service_name, [])
+        pattern_counts: list[float] = []
+        for key, (pattern, _, _) in _COMPILED_PATTERNS.items():
+            hits = sum(1 for line in log_buf if pattern.search(line))
+            pattern_counts.append(float(hits) / max(len(log_buf), 1))
+        # Pad to exactly 5 slots
+        while len(pattern_counts) < 5:
+            pattern_counts.append(0.0)
+
         return {
             "error_rate": error_rate,
-            "response_time_p95": 0.0,  # populated when response time data is available
-            "resource_utilisation": 0.0,
-            "error_code_freq_0": 0.0,
-            "error_code_freq_1": 0.0,
-            "error_code_freq_2": 0.0,
-            "error_code_freq_3": 0.0,
-            "error_code_freq_4": 0.0,
+            "response_time_p95": response_p95,
+            "resource_utilisation": 0.0,  # populated when JMX/metrics endpoint is available
+            "error_code_freq_0": pattern_counts[0],
+            "error_code_freq_1": pattern_counts[1],
+            "error_code_freq_2": pattern_counts[2],
+            "error_code_freq_3": pattern_counts[3],
+            "error_code_freq_4": pattern_counts[4],
         }
 
     def _get_baseline_mean(self, service_name: str) -> float:

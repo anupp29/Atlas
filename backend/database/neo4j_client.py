@@ -6,10 +6,10 @@ Enforces client_id on every query. Caches results 60 seconds per (query_hash, cl
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
-import time
 from typing import Any
 
 import structlog
@@ -20,6 +20,7 @@ logger = structlog.get_logger(__name__)
 
 _CACHE: dict[str, tuple[list[dict], float]] = {}
 _CACHE_TTL_SECONDS = 60
+_CACHE_LOCK = asyncio.Lock()
 
 # Modules permitted to execute write transactions
 _ALLOWED_WRITERS = frozenset({
@@ -28,6 +29,7 @@ _ALLOWED_WRITERS = frozenset({
     "backend.orchestrator.nodes.n2_itsm",
     "backend.orchestrator.nodes.n3_graph",
     "backend.learning.trust_progression",
+    "backend.main",                    # CMDB webhook updates
 })
 
 
@@ -106,7 +108,8 @@ class Neo4jClient:
 
         cache_key = self._cache_key(cypher, params, client_id)
         if use_cache:
-            cached = _CACHE.get(cache_key)
+            async with _CACHE_LOCK:
+                cached = _CACHE.get(cache_key)
             if cached:
                 results, ts = cached
                 if time.monotonic() - ts < _CACHE_TTL_SECONDS:
@@ -121,7 +124,8 @@ class Neo4jClient:
                     rows = [dict(r) for r in records]
 
                 if use_cache:
-                    _CACHE[cache_key] = (rows, time.monotonic())
+                    async with _CACHE_LOCK:
+                        _CACHE[cache_key] = (rows, time.monotonic())
 
                 logger.info(
                     "neo4j_client.query_executed",
@@ -138,7 +142,7 @@ class Neo4jClient:
                     error=str(exc),
                 )
                 if attempt < 3:
-                    time.sleep(2 ** attempt)
+                    await asyncio.sleep(2 ** attempt)
             except Neo4jError as exc:
                 logger.error("neo4j_client.query_error", error=str(exc), cypher=cypher[:80])
                 return None
@@ -196,7 +200,7 @@ class Neo4jClient:
             except ServiceUnavailable as exc:
                 logger.warning("neo4j_client.write_unavailable", attempt=attempt, error=str(exc))
                 if attempt < 3:
-                    time.sleep(2 ** attempt)
+                    await asyncio.sleep(2 ** attempt)
             except Neo4jError as exc:
                 logger.error("neo4j_client.write_error", error=str(exc))
                 return False

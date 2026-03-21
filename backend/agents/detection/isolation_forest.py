@@ -100,37 +100,45 @@ class IsolationForestDetector:
                 )
                 return
 
-            X = np.array(self._baseline_observations, dtype=np.float32)
-            model = IsolationForest(
-                contamination=_CONTAMINATION,
-                random_state=42,
-                n_estimators=100,
-            )
-            model.fit(X)
-
             try:
-                import shap  # type: ignore[import]
-                explainer = shap.TreeExplainer(model)
+                X = np.array(self._baseline_observations, dtype=np.float32)
+                model = IsolationForest(
+                    contamination=_CONTAMINATION,
+                    random_state=42,
+                    n_estimators=100,
+                )
+                model.fit(X)
+
+                try:
+                    import shap  # type: ignore[import]
+                    explainer = shap.TreeExplainer(model)
+                except Exception as exc:
+                    logger.warning(
+                        "isolation_forest.shap_init_failed",
+                        client_id=self.client_id,
+                        service_name=self.service_name,
+                        error=str(exc),
+                    )
+                    explainer = None
+
+                self._model = model
+                self._explainer = explainer
+                self._model_ready = True
+                self._last_retrain_time = datetime.now(timezone.utc).timestamp()
+                logger.info(
+                    "isolation_forest.trained",
+                    client_id=self.client_id,
+                    service_name=self.service_name,
+                    n_samples=len(self._baseline_observations),
+                    shap_available=explainer is not None,
+                )
             except Exception as exc:
-                logger.warning(
-                    "isolation_forest.shap_init_failed",
+                logger.error(
+                    "isolation_forest.train_failed",
                     client_id=self.client_id,
                     service_name=self.service_name,
                     error=str(exc),
                 )
-                explainer = None
-
-            self._model = model
-            self._explainer = explainer
-            self._model_ready = True
-            self._last_retrain_time = datetime.now(timezone.utc).timestamp()
-            logger.info(
-                "isolation_forest.trained",
-                client_id=self.client_id,
-                service_name=self.service_name,
-                n_samples=len(self._baseline_observations),
-                shap_available=explainer is not None,
-            )
 
     def schedule_retrain(self) -> None:
         """

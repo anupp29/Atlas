@@ -24,6 +24,8 @@ _BOOTSTRAP_MINUTES = 30
 _SEASONAL_SLOTS = 168
 # Exactly 5 log samples required for non-Critical EvidencePackages
 _REQUIRED_LOG_SAMPLES = 5
+# Rolling log buffer max size per service
+_LOG_BUFFER_MAX = 100
 # Detection thresholds (sigma)
 _WARNING_SIGMA = 2.0
 _ALERT_SIGMA = 3.0
@@ -150,7 +152,6 @@ class BaseAgent(ABC):
 
         # Rolling log sample buffer per service
         self._log_buffer: dict[str, list[str]] = defaultdict(list)
-        _LOG_BUFFER_MAX = 100
         self._log_buffer_max = _LOG_BUFFER_MAX
 
         # Alert sustain tracking: service → (first_alert_time, sigma)

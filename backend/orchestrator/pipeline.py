@@ -1,0 +1,555 @@
+"""
+ATLAS LangGraph orchestration pipeline.
+
+Assembles all 7 nodes into the complete state machine. Compiles the graph
+with a SQLite-backed checkpointer so state persists across server restarts.
+
+Public interface:
+    run_incident(evidence_packages, client_id, correlation_type, early_warning_signals)
+        → starts a new incident thread, returns (thread_id, initial_state)
+
+    resume_after_approval(thread_id, human_action, modifier, rejection_reason, modified_params)
+        → resumes a suspended graph after human decision
+
+    get_incident_state(thread_id) → current state dict for a thread
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import aiosqlite
+import structlog
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from backend.orchestrator.nodes import (
+    n1_classifier,
+    n2_itsm,
+    n3_graph,
+    n4_semantic,
+    n5_reasoning,
+    n6_confidence,
+    n7_router,
+)
+from backend.orchestrator.state import AtlasState, build_initial_state
+
+logger = structlog.get_logger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Graph compilation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CHECKPOINT_DB_ENV = "ATLAS_CHECKPOINT_DB_PATH"
+
+# Module-level compiled graph — built once on first use
+_graph: CompiledStateGraph | None = None
+_checkpointer: AsyncSqliteSaver | None = None
+_checkpoint_conn: aiosqlite.Connection | None = None
+_graph_lock = asyncio.Lock()
+
+
+async def _get_graph() -> CompiledStateGraph:
+    """
+    Build and compile the LangGraph state machine on first call.
+    Subsequent calls return the cached compiled graph.
+    Thread-safe: uses an asyncio.Lock to prevent double-initialisation.
+    """
+    global _graph, _checkpointer, _checkpoint_conn
+
+    if _graph is not None:
+        return _graph
+
+    async with _graph_lock:
+        # Double-checked locking — another coroutine may have built it while we waited
+        if _graph is not None:
+            return _graph
+
+        checkpoint_path = os.environ.get(_CHECKPOINT_DB_ENV)
+        if not checkpoint_path:
+            raise RuntimeError(
+                f"Environment variable '{_CHECKPOINT_DB_ENV}' is not set. "
+                "ATLAS cannot persist incident state without a checkpoint database path."
+            )
+
+        # Hold the connection at module level so it is closed on shutdown
+        _checkpoint_conn = await aiosqlite.connect(checkpoint_path)
+        _checkpointer = AsyncSqliteSaver(_checkpoint_conn)
+        await _checkpointer.setup()
+
+        builder = StateGraph(AtlasState)
+
+        # ── Add all 7 nodes ───────────────────────────────────────────────────────
+        builder.add_node("n1_classifier", n1_classifier.run)
+        builder.add_node("n2_itsm",       n2_itsm.run)
+        builder.add_node("n3_graph",      n3_graph.run)
+        builder.add_node("n4_semantic",   n4_semantic.run)
+        builder.add_node("n5_reasoning",  n5_reasoning.run)
+        builder.add_node("n6_confidence", n6_confidence.run)
+        builder.add_node("n7_router",     n7_router.run)
+
+        # ── Execution node (post-approval) ────────────────────────────────────────
+        builder.add_node("execute_playbook", _execute_playbook_node)
+
+        # ── Learning node (post-resolution) ───────────────────────────────────────
+        builder.add_node("n_learn", _learning_node)
+
+        # ── Define edges ──────────────────────────────────────────────────────────
+        builder.set_entry_point("n1_classifier")
+        builder.add_edge("n1_classifier", "n2_itsm")
+        builder.add_edge("n2_itsm",       "n3_graph")
+        builder.add_edge("n3_graph",      "n4_semantic")
+        builder.add_edge("n4_semantic",   "n5_reasoning")
+        builder.add_edge("n5_reasoning",  "n6_confidence")
+        builder.add_edge("n6_confidence", "n7_router")
+
+        # ── Conditional edge from n7_router ───────────────────────────────────────
+        builder.add_conditional_edges(
+            "n7_router",
+            _route_after_n7,
+            {
+                "execute": "execute_playbook",
+                "end":     END,
+            },
+        )
+
+        builder.add_edge("execute_playbook", "n_learn")
+        builder.add_edge("n_learn", END)
+
+        _graph = builder.compile(checkpointer=_checkpointer)
+
+        logger.info("pipeline.graph_compiled", nodes=list(builder.nodes))
+        return _graph
+
+
+async def close_graph() -> None:
+    """
+    Close the SQLite checkpoint connection. Call on application shutdown.
+    Registered in the lifespan context manager.
+    """
+    global _checkpoint_conn
+    if _checkpoint_conn is not None:
+        await _checkpoint_conn.close()
+        _checkpoint_conn = None
+        logger.info("pipeline.checkpoint_connection_closed")
+
+
+def _route_after_n7(state: AtlasState) -> str:
+    """
+    Conditional routing after N7.
+    AUTO_EXECUTE → execute immediately.
+    Human review paths → N7 raises NodeInterrupt before this is called,
+    so this function only runs for AUTO_EXECUTE or after human resumes.
+    """
+    routing = state.get("routing_decision", "L2_L3_ESCALATION")
+    human_action = state.get("human_action", "")
+
+    if routing == "AUTO_EXECUTE":
+        return "execute"
+
+    # After human resumes: approved/modified → execute, rejected/escalated → end
+    if human_action in ("approved", "modified"):
+        return "execute"
+
+    return "end"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Execution node
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _execute_playbook_node(state: AtlasState) -> dict[str, Any]:
+    """
+    Execute the recommended playbook.
+    Imports the playbook module dynamically from the playbook library.
+    """
+    from backend.execution.playbook_library import get_playbook
+    from backend.orchestrator.state import append_audit_entry
+
+    client_id = state["client_id"]
+    incident_id = state["incident_id"]
+    action_id = state.get("recommended_action_id", "")
+    actor = state.get("human_modifier") or "ATLAS_AUTO"
+    ticket_id = state.get("servicenow_ticket_id", "")
+
+    # Use modified parameters if L2 modified the action
+    parameters = state.get("human_modified_parameters") or None
+
+    logger.info(
+        "pipeline.execute_playbook",
+        client_id=client_id,
+        incident_id=incident_id,
+        action_id=action_id,
+        actor=actor,
+    )
+
+    playbook_meta = get_playbook(action_id)
+    if playbook_meta is None:
+        logger.error("pipeline.playbook_not_found", action_id=action_id)
+        return {
+            "execution_status": "failed",
+            "execution_result": {"error": f"Playbook '{action_id}' not found in library."},
+            "audit_trail": append_audit_entry(state, {
+                "node": "execute_playbook",
+                "actor": actor,
+                "action": "playbook_not_found",
+                "action_id": action_id,
+            }),
+        }
+
+    # Check auto_execute_eligible flag
+    if not playbook_meta.auto_execute_eligible and state.get("routing_decision") == "AUTO_EXECUTE":
+        logger.error(
+            "pipeline.playbook_not_auto_eligible",
+            action_id=action_id,
+            action_class=playbook_meta.action_class,
+        )
+        return {
+            "execution_status": "failed",
+            "execution_result": {"error": f"Playbook '{action_id}' is not auto-execute eligible."},
+            "routing_decision": "L2_L3_ESCALATION",
+            "audit_trail": append_audit_entry(state, {
+                "node": "execute_playbook",
+                "actor": "ATLAS_AUTO",
+                "action": "auto_execute_blocked",
+                "action_id": action_id,
+                "reason": "not auto_execute_eligible",
+            }),
+        }
+
+    # Dynamically import and run the playbook module
+    try:
+        result = await _dispatch_playbook(
+            action_id=action_id,
+            client_id=client_id,
+            incident_id=incident_id,
+            actor=actor,
+            ticket_id=ticket_id,
+            parameters=parameters,
+            evidence_packages=state["evidence_packages"],
+        )
+    except Exception as exc:
+        logger.error(
+            "pipeline.playbook_execution_error",
+            client_id=client_id,
+            incident_id=incident_id,
+            action_id=action_id,
+            error=str(exc),
+        )
+        result = {"success": False, "outcome": "error", "detail": str(exc)}
+
+    execution_status = "success" if result.get("success") else result.get("outcome", "failed")
+    resolution_outcome = "success" if result.get("success") else "failure"
+
+    return {
+        "execution_status": execution_status,
+        "execution_result": result,
+        "resolution_outcome": resolution_outcome,
+        "audit_trail": append_audit_entry(state, {
+            "node": "execute_playbook",
+            "actor": actor,
+            "action": "playbook_executed",
+            "action_id": action_id,
+            "outcome": execution_status,
+        }),
+    }
+
+
+async def _dispatch_playbook(
+    action_id: str,
+    client_id: str,
+    incident_id: str,
+    actor: str,
+    ticket_id: str,
+    parameters: dict | None,
+    evidence_packages: list[dict],
+) -> dict[str, Any]:
+    """Dispatch to the correct playbook module based on action_id."""
+    primary_service = evidence_packages[0].get("service_name", "") if evidence_packages else ""
+
+    if action_id == "connection-pool-recovery-v2":
+        from backend.execution.playbooks.connection_pool_recovery_v2 import execute
+        result = await execute(
+            client_id=client_id,
+            incident_id=incident_id,
+            service_name=primary_service,
+            actor=actor,
+            servicenow_ticket_id=ticket_id,
+            parameters=parameters,
+        )
+        return {
+            "success": result.success,
+            "outcome": result.outcome,
+            "detail": result.detail,
+            "audit_record_id": result.audit_record_id,
+            "execution_seconds": result.execution_seconds,
+        }
+
+    if action_id == "redis-memory-policy-rollback-v1":
+        from backend.execution.playbooks.redis_memory_policy_rollback_v1 import execute
+        result = await execute(
+            client_id=client_id,
+            incident_id=incident_id,
+            service_name=primary_service,
+            actor=actor,
+            servicenow_ticket_id=ticket_id,
+            parameters=parameters,
+        )
+        return {
+            "success": result.success,
+            "outcome": result.outcome,
+            "detail": result.detail,
+            "audit_record_id": result.audit_record_id,
+            "execution_seconds": result.execution_seconds,
+        }
+
+    raise NotImplementedError(
+        f"No dispatch handler for playbook '{action_id}'. "
+        "Add a dispatch case in pipeline._dispatch_playbook()."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Learning node
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _learning_node(state: AtlasState) -> dict[str, Any]:
+    """
+    Post-resolution learning. Runs asynchronously — never blocks resolution.
+    Writes decision history record and triggers recalibration.
+    """
+    from backend.learning import decision_history, recalibration, trust_progression
+    from backend.orchestrator.state import append_audit_entry
+
+    client_id = state["client_id"]
+    incident_id = state["incident_id"]
+
+    mttr_start: datetime = state.get("mttr_start_time") or datetime.now(timezone.utc)
+    mttr_seconds = int((datetime.now(timezone.utc) - mttr_start).total_seconds())
+
+    resolution_outcome = state.get("resolution_outcome", "failure")
+    routing_tier_map = {
+        "AUTO_EXECUTE": "auto",
+        "L1_HUMAN_REVIEW": "L1",
+        "L2_L3_ESCALATION": "L2",
+    }
+    routing_tier = routing_tier_map.get(state.get("routing_decision", ""), "L2")
+
+    evidence_packages = state["evidence_packages"]
+    primary_pkg = max(evidence_packages, key=lambda p: p.get("detection_confidence", 0.0), default={})
+
+    record = {
+        "client_id": client_id,
+        "incident_id": incident_id,
+        "anomaly_type": primary_pkg.get("anomaly_type", ""),
+        "service_class": primary_pkg.get("service_name", ""),
+        "recommended_action_id": state.get("recommended_action_id", ""),
+        "confidence_score_at_decision": state.get("composite_confidence_score", 0.0),
+        "routing_tier": routing_tier,
+        "human_action": state.get("human_action", "approved"),
+        "modification_diff": state.get("human_modified_parameters"),
+        "rejection_reason": state.get("human_rejection_reason"),
+        "resolution_outcome": resolution_outcome,
+        "actual_mttr": mttr_seconds,
+        "recurrence_within_48h": False,
+    }
+
+    try:
+        decision_history.write_record(record)
+        logger.info(
+            "pipeline.learning.decision_recorded",
+            client_id=client_id,
+            incident_id=incident_id,
+            outcome=resolution_outcome,
+        )
+    except Exception as exc:
+        logger.error("pipeline.learning.write_failed", error=str(exc))
+
+    # Recalibration runs in background — never blocks
+    asyncio.create_task(_run_recalibration(
+        client_id=client_id,
+        anomaly_type=primary_pkg.get("anomaly_type", ""),
+        service_class=primary_pkg.get("service_name", ""),
+        action_id=state.get("recommended_action_id", ""),
+    ))
+
+    # Trust progression check
+    asyncio.create_task(_check_trust_progression(client_id, incident_id))
+
+    from datetime import timedelta
+    recurrence_due = datetime.now(timezone.utc) + timedelta(hours=48)
+
+    return {
+        "mttr_seconds": mttr_seconds,
+        "recurrence_check_due_at": recurrence_due,
+        "audit_trail": append_audit_entry(state, {
+            "node": "n_learn",
+            "actor": "ATLAS_AUTO",
+            "action": "learning_complete",
+            "mttr_seconds": mttr_seconds,
+            "resolution_outcome": resolution_outcome,
+            "decision_record_written": True,
+        }),
+    }
+
+
+async def _run_recalibration(
+    client_id: str,
+    anomaly_type: str,
+    service_class: str,
+    action_id: str,
+) -> None:
+    """Background task: recalibrate Factor 1 after resolution."""
+    try:
+        from backend.learning.recalibration import recalibrate_after_resolution
+        await recalibrate_after_resolution(
+            client_id=client_id,
+            incident_id="post_resolution",
+            anomaly_type=anomaly_type,
+            service_class=service_class,
+            action_id=action_id,
+        )
+    except Exception as exc:
+        logger.error("pipeline.recalibration_failed", error=str(exc))
+
+
+async def _check_trust_progression(client_id: str, incident_id: str = "") -> None:
+    """Background task: check trust stage progression after resolution."""
+    try:
+        from backend.learning.trust_progression import evaluate_progression
+        await evaluate_progression(client_id, incident_id)
+    except Exception as exc:
+        logger.error("pipeline.trust_progression_failed", error=str(exc))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public interface
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_incident(
+    evidence_packages: list[dict],
+    client_id: str,
+    correlation_type: str = "ISOLATED_ANOMALY",
+    early_warning_signals: list[dict] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Start a new incident thread through the pipeline.
+
+    Args:
+        evidence_packages:      List of EvidencePackage dicts from correlation engine.
+        client_id:              Mandatory. Multi-tenancy key.
+        correlation_type:       "CASCADE_INCIDENT" | "ISOLATED_ANOMALY"
+        early_warning_signals:  Optional early warning signals.
+
+    Returns:
+        (thread_id, final_or_interrupted_state)
+        thread_id is used to resume the graph after human approval.
+    """
+    if not client_id:
+        raise ValueError("client_id is required to run an incident.")
+    if not evidence_packages:
+        raise ValueError("evidence_packages cannot be empty.")
+
+    incident_id = str(uuid.uuid4())
+    thread_id = f"{client_id}_{incident_id}"
+
+    initial_state = build_initial_state(
+        client_id=client_id,
+        incident_id=incident_id,
+        evidence_packages=evidence_packages,
+        correlation_type=correlation_type,
+        early_warning_signals=early_warning_signals,
+    )
+
+    graph = await _get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    logger.info(
+        "pipeline.incident_started",
+        client_id=client_id,
+        incident_id=incident_id,
+        thread_id=thread_id,
+        correlation_type=correlation_type,
+    )
+
+    final_state: dict[str, Any] = {}
+    async for event in graph.astream(initial_state, config=config):
+        # Each event is a dict of {node_name: state_updates}
+        for node_name, updates in event.items():
+            if isinstance(updates, dict):
+                final_state.update(updates)
+                logger.debug("pipeline.node_complete", node=node_name)
+
+    return thread_id, final_state
+
+
+async def resume_after_approval(
+    thread_id: str,
+    human_action: str,
+    modifier: str = "",
+    rejection_reason: str = "",
+    modified_parameters: dict | None = None,
+) -> dict[str, Any]:
+    """
+    Resume a suspended graph after human decision.
+
+    Args:
+        thread_id:           The thread_id returned by run_incident().
+        human_action:        "approved" | "modified" | "rejected" | "escalated"
+        modifier:            Engineer name.
+        rejection_reason:    Required if human_action == "rejected".
+        modified_parameters: Parameter overrides if human_action == "modified".
+
+    Returns:
+        Final state dict after pipeline completes.
+    """
+    valid_actions = {"approved", "modified", "rejected", "escalated"}
+    if human_action not in valid_actions:
+        raise ValueError(f"human_action must be one of {valid_actions}, got '{human_action}'")
+
+    graph = await _get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Inject human decision into state before resuming
+    human_update: dict[str, Any] = {
+        "human_action": human_action,
+        "human_modifier": modifier,
+        "human_rejection_reason": rejection_reason,
+        "human_modified_parameters": modified_parameters or {},
+    }
+
+    logger.info(
+        "pipeline.resuming_after_human",
+        thread_id=thread_id,
+        human_action=human_action,
+        modifier=modifier,
+    )
+
+    final_state: dict[str, Any] = {}
+    async for event in graph.astream(human_update, config=config):
+        for node_name, updates in event.items():
+            if isinstance(updates, dict):
+                final_state.update(updates)
+                logger.debug("pipeline.node_complete_after_resume", node=node_name)
+
+    return final_state
+
+
+async def get_incident_state(thread_id: str) -> dict[str, Any] | None:
+    """
+    Return the current persisted state for a thread.
+    Returns None if the thread does not exist.
+    """
+    graph = await _get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = await graph.aget_state(config)
+        return dict(snapshot.values) if snapshot else None
+    except Exception as exc:
+        logger.error("pipeline.get_state_failed", thread_id=thread_id, error=str(exc))
+        return None

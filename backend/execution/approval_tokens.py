@@ -4,18 +4,24 @@ Every token is time-limited, incident-scoped, and single-use.
 
 Uses HMAC-SHA256 signing with the ATLAS_SECRET_KEY environment variable.
 Missing secret key = hard startup failure. No weak defaults. Ever.
+
+Nonces are persisted to SQLite so replay attacks are blocked across server restarts.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import os
 import secrets
+import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, Generator
 
 import structlog
 
@@ -27,6 +33,8 @@ logger = structlog.get_logger(__name__)
 
 _SECRET_KEY_ENV = "ATLAS_SECRET_KEY"
 _MIN_KEY_LENGTH = 32  # bytes — NIST minimum for HMAC-SHA256
+_NONCE_DB_ENV = "ATLAS_AUDIT_DB_PATH"  # reuse audit DB path for nonce store
+_NONCE_RETENTION_SECONDS = 7200  # 2 hours
 
 
 def _load_secret_key() -> bytes:
@@ -53,42 +61,83 @@ def _load_secret_key() -> bytes:
 
 _SIGNING_KEY: bytes = _load_secret_key()
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Nonce store — in-memory for MVP, Redis-backed in production
+# Persistent nonce store — SQLite-backed, survives server restarts
 # ─────────────────────────────────────────────────────────────────────────────
 
-# nonce → expiry_unix_timestamp
-_USED_NONCES: dict[str, float] = {}
+def _get_nonce_db_path() -> str:
+    """Derive nonce DB path from environment. Stored alongside the audit DB."""
+    audit_path = os.environ.get(_NONCE_DB_ENV, "")
+    if not audit_path:
+        raise RuntimeError(
+            f"Environment variable '{_NONCE_DB_ENV}' is not set. "
+            "Cannot initialise nonce store for approval tokens."
+        )
+    # Store nonces in a sibling file to the audit DB
+    return str(Path(audit_path).parent / "atlas_nonces.db")
 
-# Prune nonces older than this to prevent unbounded growth
-_NONCE_RETENTION_SECONDS = 7200  # 2 hours
+
+@contextmanager
+def _nonce_conn() -> Generator[sqlite3.Connection, None, None]:
+    """Open a WAL-mode SQLite connection to the nonce store."""
+    path = _get_nonce_db_path()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _initialise_nonce_db() -> None:
+    """Create the nonces table if it does not exist. Called at module load."""
+    with _nonce_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS used_nonces (
+                nonce TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_nonces_expires ON used_nonces(expires_at)")
+        conn.commit()
+
+
+def _is_nonce_used(nonce: str) -> bool:
+    """Return True if the nonce exists in the persistent store."""
+    with _nonce_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM used_nonces WHERE nonce = ?", (nonce,)
+        ).fetchone()
+        return row is not None
+
+
+def _mark_nonce_used(nonce: str, expires_at: float) -> None:
+    """Persist a nonce as used. Idempotent."""
+    with _nonce_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO used_nonces (nonce, expires_at) VALUES (?, ?)",
+            (nonce, expires_at),
+        )
+        conn.commit()
 
 
 def _prune_expired_nonces() -> None:
-    """Remove expired nonces from the store. Called on every validation."""
-    now = time.time()
-    expired = [n for n, exp in _USED_NONCES.items() if now > exp + _NONCE_RETENTION_SECONDS]
-    for n in expired:
-        del _USED_NONCES[n]
+    """Delete nonces that expired more than _NONCE_RETENTION_SECONDS ago."""
+    cutoff = time.time() - _NONCE_RETENTION_SECONDS
+    with _nonce_conn() as conn:
+        conn.execute("DELETE FROM used_nonces WHERE expires_at < ?", (cutoff,))
+        conn.commit()
+
+
+# Initialise on module load — safe to call multiple times
+_initialise_nonce_db()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Token format
 # ─────────────────────────────────────────────────────────────────────────────
-# Token is a URL-safe base64-encoded JSON payload + HMAC-SHA256 signature.
-# Format: <base64url(payload_json)>.<hex_signature>
-#
-# Payload fields:
-#   incident_id   — the specific incident this token authorises
-#   approver_role — "primary" | "secondary" | "sdm"
-#   nonce         — 32-byte random hex string (single-use guarantee)
-#   issued_at     — Unix timestamp
-#   expires_at    — Unix timestamp
-#
-# The token is designed to be embeddable in a URL query parameter.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import base64
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -227,8 +276,8 @@ def validate_approval_token(token: str) -> tuple[bool, str, str, str]:
         )
         return False, incident_id, approver_role, "token_expired"
 
-    # ── 5. Check one-time use ─────────────────────────────────────────────────
-    if nonce in _USED_NONCES:
+    # ── 5. Check one-time use (persistent — survives restarts) ────────────────
+    if _is_nonce_used(nonce):
         logger.warning(
             "approval_tokens.replay_attempt",
             incident_id=incident_id,
@@ -237,8 +286,8 @@ def validate_approval_token(token: str) -> tuple[bool, str, str, str]:
         )
         return False, incident_id, approver_role, "token_already_used"
 
-    # ── 6. Mark nonce as used ─────────────────────────────────────────────────
-    _USED_NONCES[nonce] = expires_at
+    # ── 6. Mark nonce as used (persisted to SQLite) ───────────────────────────
+    _mark_nonce_used(nonce, expires_at)
 
     logger.info(
         "approval_tokens.validated",
@@ -252,14 +301,13 @@ def validate_approval_token(token: str) -> tuple[bool, str, str, str]:
 def store_nonce(nonce: str, expires_at: float) -> None:
     """
     Explicitly mark a nonce as used.
-    Called when a token is consumed outside the normal validate flow
-    (e.g. after recording the approval in the audit database).
+    Called when a token is consumed outside the normal validate flow.
 
     Args:
         nonce:      The nonce string from the token payload.
         expires_at: Unix timestamp when the token expires.
     """
-    _USED_NONCES[nonce] = expires_at
+    _mark_nonce_used(nonce, expires_at)
     logger.debug("approval_tokens.nonce_stored", nonce_prefix=nonce[:8])
 
 
