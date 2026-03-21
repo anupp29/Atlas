@@ -48,6 +48,7 @@ class AtlasState(TypedDict, total=False):
     client_id: str                          # [IMMUTABLE] set by pipeline entry point
     incident_id: str                        # [IMMUTABLE] uuid4 assigned at pipeline start
     evidence_packages: list[dict]           # [IMMUTABLE] raw EvidencePackage dicts from agents
+    thread_id: str                          # injected by pipeline after run_incident, for frontend
 
     # ── Classification (N1) ───────────────────────────────────────────────────
     correlation_type: str                   # "CASCADE_INCIDENT" | "ISOLATED_ANOMALY"
@@ -221,6 +222,7 @@ def build_initial_state(
         incident_id=incident_id,
         evidence_packages=evidence_packages,
         mttr_start_time=now,
+        thread_id="",  # injected by pipeline after run_incident
 
         # Classification defaults
         correlation_type=correlation_type,

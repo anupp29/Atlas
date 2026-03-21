@@ -42,6 +42,64 @@ from backend.orchestrator.state import AtlasState, build_initial_state
 logger = structlog.get_logger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Activity broadcast callback — registered by main.py to avoid circular import
+# ─────────────────────────────────────────────────────────────────────────────
+
+_activity_broadcast_fn: Any = None
+
+
+def register_activity_broadcast(fn: Any) -> None:
+    """Register the activity broadcast function from main.py."""
+    global _activity_broadcast_fn
+    _activity_broadcast_fn = fn
+
+
+async def _broadcast_node_activity(
+    node_name: str,
+    updates: dict[str, Any],
+    client_id: str,
+    incident_id: str,
+) -> None:
+    """Broadcast a node completion event to the activity feed WebSocket."""
+    if _activity_broadcast_fn is None:
+        return
+    try:
+        _NODE_MESSAGES: dict[str, str] = {
+            "n1_classifier": f"Incident classified — priority {updates.get('incident_priority', '?')}",
+            "n2_itsm": f"ServiceNow ticket {updates.get('servicenow_ticket_id', 'pending')} created",
+            "n3_graph": (
+                f"Graph intelligence: {len(updates.get('blast_radius', []))} blast radius services, "
+                f"{len(updates.get('recent_deployments', []))} deployments"
+            ),
+            "n4_semantic": (
+                f"Semantic search: {len(updates.get('semantic_matches', []))} matches found"
+            ),
+            "n5_reasoning": f"LLM reasoning complete — {updates.get('recommended_action_id', '?')}",
+            "n6_confidence": (
+                f"Confidence score: {updates.get('composite_confidence_score', 0.0):.2f} — "
+                f"routing: {updates.get('routing_decision', '?')}"
+            ),
+            "n7_router": f"Routing dispatched: {updates.get('routing_decision', '?')}",
+            "execute_playbook": f"Playbook executed — {updates.get('execution_status', '?')}",
+            "n_learn": "Learning engine updated",
+        }
+        message = _NODE_MESSAGES.get(node_name, f"Node {node_name} complete")
+        await _activity_broadcast_fn({
+            "type": "orchestrator_node",
+            "id": f"node-{node_name}-{incident_id[:8]}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "component": node_name,
+            "message": message,
+            "client_id": client_id,
+            "meta": {
+                "node": node_name,
+                "incident_id": incident_id,
+            },
+        })
+    except Exception:
+        pass  # Never block pipeline for activity broadcast
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Graph compilation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -323,7 +381,7 @@ async def _learning_node(state: AtlasState) -> dict[str, Any]:
     Post-resolution learning. Runs asynchronously — never blocks resolution.
     Writes decision history record and triggers recalibration.
     """
-    from backend.learning import decision_history, recalibration, trust_progression
+    from backend.learning import decision_history
     from backend.orchestrator.state import append_audit_entry
 
     client_id = state["client_id"]
@@ -480,10 +538,55 @@ async def run_incident(
     final_state: dict[str, Any] = {}
     async for event in graph.astream(initial_state, config=config):
         # Each event is a dict of {node_name: state_updates}
+        # LangGraph emits NodeInterrupt as {"__interrupt__": (Interrupt(...),)}
         for node_name, updates in event.items():
+            if node_name == "__interrupt__":
+                # Graph suspended for human review — extract embedded state update
+                # from the interrupt payload and apply it so audit_trail is captured.
+                interrupt_values = updates if isinstance(updates, (list, tuple)) else [updates]
+                for interrupt_obj in interrupt_values:
+                    # Interrupt value is the dict passed to NodeInterrupt(...)
+                    payload = getattr(interrupt_obj, "value", interrupt_obj)
+                    if isinstance(payload, dict):
+                        state_update = payload.get("_state_update", {})
+                        if state_update:
+                            final_state.update(state_update)
+                logger.info(
+                    "pipeline.graph_interrupted",
+                    client_id=client_id,
+                    incident_id=incident_id,
+                    thread_id=thread_id,
+                )
+                continue
             if isinstance(updates, dict):
                 final_state.update(updates)
                 logger.debug("pipeline.node_complete", node=node_name)
+                # Broadcast node completion to activity feed
+                await _broadcast_node_activity(
+                    node_name=node_name,
+                    updates=updates,
+                    client_id=client_id,
+                    incident_id=incident_id,
+                )
+
+    # After streaming, fetch the full persisted state from the checkpointer.
+    # This is the authoritative source — it contains all fields set by every node,
+    # not just the incremental update dicts emitted during this stream.
+    try:
+        snapshot = await graph.aget_state(config)
+        if snapshot and snapshot.values:
+            full_state = dict(snapshot.values)
+            # Merge: full_state is authoritative, but keep any keys we set locally
+            # (e.g. thread_id which is not in the checkpointed state yet)
+            full_state.update({k: v for k, v in final_state.items() if k not in full_state})
+            final_state = full_state
+    except Exception as exc:
+        logger.warning(
+            "pipeline.snapshot_fetch_failed",
+            thread_id=thread_id,
+            error=str(exc),
+            note="Using streamed state — may be incomplete.",
+        )
 
     return thread_id, final_state
 
@@ -515,13 +618,18 @@ async def resume_after_approval(
     graph = await _get_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Inject human decision into state before resuming
+    # Inject human decision into the checkpointed state before resuming.
+    # LangGraph's correct resume pattern: update_state() first, then astream(None).
+    # Passing the update dict directly to astream() treats it as a new initial state
+    # rather than a continuation — this is incorrect and breaks the checkpoint chain.
     human_update: dict[str, Any] = {
         "human_action": human_action,
         "human_modifier": modifier,
         "human_rejection_reason": rejection_reason,
         "human_modified_parameters": modified_parameters or {},
     }
+
+    await graph.aupdate_state(config, human_update)
 
     logger.info(
         "pipeline.resuming_after_human",
@@ -531,11 +639,35 @@ async def resume_after_approval(
     )
 
     final_state: dict[str, Any] = {}
-    async for event in graph.astream(human_update, config=config):
+    async for event in graph.astream(None, config=config):
         for node_name, updates in event.items():
+            if node_name == "__interrupt__":
+                # Should not happen after human resume, but handle defensively
+                interrupt_values = updates if isinstance(updates, (list, tuple)) else [updates]
+                for interrupt_obj in interrupt_values:
+                    payload = getattr(interrupt_obj, "value", interrupt_obj)
+                    if isinstance(payload, dict):
+                        state_update = payload.get("_state_update", {})
+                        if state_update:
+                            final_state.update(state_update)
+                continue
             if isinstance(updates, dict):
                 final_state.update(updates)
                 logger.debug("pipeline.node_complete_after_resume", node=node_name)
+
+    # Fetch full persisted state — authoritative after resume
+    try:
+        snapshot = await graph.aget_state(config)
+        if snapshot and snapshot.values:
+            full_state = dict(snapshot.values)
+            full_state.update({k: v for k, v in final_state.items() if k not in full_state})
+            final_state = full_state
+    except Exception as exc:
+        logger.warning(
+            "pipeline.resume_snapshot_fetch_failed",
+            thread_id=thread_id,
+            error=str(exc),
+        )
 
     return final_state
 

@@ -38,6 +38,7 @@ from backend.config.client_registry import get_all_client_ids, load_all_clients
 from backend.database import audit_db
 from backend.database.chromadb_client import ChromaDBClient
 from backend.database.neo4j_client import Neo4jClient
+from backend.execution.playbook_library import validate_action_id
 
 logger = structlog.get_logger(__name__)
 
@@ -159,6 +160,8 @@ async def lifespan(app: FastAPI):
     audit_db.initialise_db()
     from backend.learning.decision_history import initialise_db as init_decision_db
     init_decision_db()
+    from backend.learning.weight_correction import initialise_db as init_weight_db
+    init_weight_db()
     logger.info("atlas.startup.databases_initialised")
 
     # Load client configs
@@ -188,6 +191,19 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     client_ids = get_all_client_ids()
     background_tasks: list[asyncio.Task] = []
+
+    # Register activity broadcast callback in pipeline (avoids circular import)
+    from backend.orchestrator.pipeline import register_activity_broadcast
+    register_activity_broadcast(activity_manager.broadcast)
+
+    # Rebuild accuracy cache from decision history so N6 has real priors on restart
+    try:
+        from backend.learning.recalibration import force_recalculate_all
+        rebuilt = await force_recalculate_all(client_ids)
+        logger.info("atlas.startup.accuracy_cache_rebuilt", patterns=rebuilt)
+    except Exception as exc:
+        logger.warning("atlas.startup.accuracy_cache_rebuild_failed", error=str(exc))
+
     for cid in client_ids:
         task = asyncio.create_task(_agent_monitoring_loop(cid))
         background_tasks.append(task)
@@ -211,20 +227,17 @@ async def lifespan(app: FastAPI):
 
 
 async def _test_llm_endpoint() -> None:
-    """Test LLM endpoint connectivity. Non-fatal — logs warning if unavailable."""
-    import httpx
+    """
+    Log the configured LLM endpoint. Non-fatal — the endpoint is this server itself,
+    so a connectivity test during startup would be a self-ping before the server is
+    fully initialised. Connectivity is implicitly verified on the first incident.
+    """
     endpoint = os.environ.get("ATLAS_LLM_ENDPOINT", "")
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(endpoint.replace("/internal/llm/reason", "/health"))
-            logger.info("atlas.startup.llm_ok", status=resp.status_code)
-    except Exception as exc:
-        logger.warning(
-            "atlas.startup.llm_unavailable",
-            endpoint=endpoint,
-            error=str(exc),
-            note="Fallback responses will be used if LLM is unreachable during incidents.",
-        )
+    logger.info(
+        "atlas.startup.llm_endpoint_configured",
+        endpoint=endpoint,
+        note="LLM endpoint is this server — connectivity verified on first incident.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -393,6 +406,7 @@ async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Pipeline resume failed: {exc}")
 
     # Update active incidents and broadcast
+    final_state["thread_id"] = request.thread_id
     _active_incidents[request.thread_id] = final_state
     await incident_manager.send_to_client(request.client_id, {
         "type": "incident_approved",
@@ -444,6 +458,7 @@ async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
         logger.error("api.reject.pipeline_error", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Pipeline resume failed: {exc}")
 
+    final_state["thread_id"] = request.thread_id
     _active_incidents[request.thread_id] = final_state
     await activity_manager.broadcast({
         "type": "human_action",
@@ -479,6 +494,8 @@ async def modify_incident(request: ModifyRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline resume failed: {exc}")
+
+    final_state["thread_id"] = request.thread_id
 
     # Store modification diff for weight correction learning
     from backend.learning.weight_correction import record_modification_diff
@@ -749,6 +766,24 @@ async def _route_event_to_agent(
     if pkg is None:
         return None
 
+    # Broadcast agent detection to activity feed
+    await activity_manager.broadcast({
+        "type": "agent_detection",
+        "id": f"detect-{pkg.evidence_id[:8]}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "component": pkg.agent_id,
+        "message": (
+            f"{pkg.agent_id}: {pkg.anomaly_type} detected on {pkg.service_name} "
+            f"(confidence {pkg.detection_confidence:.0%}, {pkg.severity_classification})"
+        ),
+        "client_id": client_id,
+        "meta": {
+            "anomaly_type": pkg.anomaly_type,
+            "service_name": pkg.service_name,
+            "confidence": pkg.detection_confidence,
+        },
+    })
+
     # Feed evidence package to correlation engine
     result: CorrelatedIncident | None = await correlation_engine.ingest_evidence(pkg)
     if result is not None:
@@ -783,6 +818,8 @@ async def _handle_incident_package(package: dict[str, Any], client_id: str) -> N
             correlation_type=correlation_type,
             early_warning_signals=early_warnings,
         )
+        # Inject thread_id into state so frontend can use it for approve/reject calls
+        state["thread_id"] = thread_id
         _active_incidents[thread_id] = state
         _active_incidents_timestamps[thread_id] = _time.monotonic()
 
@@ -842,6 +879,306 @@ def _prune_active_incidents() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal LLM endpoint — POST /internal/llm/reason
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LLMReasonRequest(BaseModel):
+    """Structured reasoning context payload from n5_reasoning.py."""
+    incident_context: dict[str, Any]
+    evidence_summary: list[dict[str, Any]]
+    blast_radius: list[dict[str, Any]] = []
+    recent_deployments: list[dict[str, Any]] = []
+    historical_graph_matches: list[dict[str, Any]] = []
+    semantic_matches: dict[str, Any] = {}
+    compliance_profile: dict[str, Any] = {}
+    reasoning_instructions: str = ""
+
+
+_LLM_RESPONSE_SCHEMA = {
+    "name": "atlas_reasoning_output",
+    "description": "Structured ITIL root cause analysis output",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "root_cause": {"type": "string"},
+            "confidence_factors": {"type": "object"},
+            "recommended_action_id": {"type": "string"},
+            "alternative_hypotheses": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis": {"type": "string"},
+                        "evidence_for": {"type": "string"},
+                        "evidence_against": {"type": "string"},
+                        "confidence": {"type": "number"},
+                    },
+                    "required": ["hypothesis", "evidence_for", "evidence_against", "confidence"],
+                },
+            },
+            "explanation_for_engineer": {"type": "string"},
+            "technical_evidence_summary": {"type": "string"},
+        },
+        "required": [
+            "root_cause", "confidence_factors", "recommended_action_id",
+            "alternative_hypotheses", "explanation_for_engineer", "technical_evidence_summary",
+        ],
+    },
+}
+
+
+@app.post("/internal/llm/reason", status_code=status.HTTP_200_OK)
+async def internal_llm_reason(request: LLMReasonRequest) -> dict[str, Any]:
+    """
+    Internal ATLAS LLM reasoning endpoint.
+    Called by n5_reasoning.py. Calls Anthropic Claude with tool_use mode.
+    Falls back to pre-computed response files if Claude is unavailable.
+    """
+    import json as _json
+    from pathlib import Path
+
+    client_id: str = request.incident_context.get("client_id", "")
+
+    logger.info(
+        "llm_endpoint.request_received",
+        client_id=client_id,
+        incident_id=request.incident_context.get("incident_id", ""),
+    )
+
+    # ── Attempt Claude call ───────────────────────────────────────────────────
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if anthropic_key:
+        try:
+            result = await _call_claude(request, anthropic_key, client_id)
+            if result:
+                # Validate recommended_action_id before returning
+                action_id = result.get("recommended_action_id", "")
+                if action_id and not validate_action_id(action_id):
+                    logger.warning(
+                        "llm_endpoint.invalid_action_id_from_claude",
+                        action_id=action_id,
+                        client_id=client_id,
+                    )
+                    result["recommended_action_id"] = _infer_action_id(request)
+                logger.info(
+                    "llm_endpoint.claude_success",
+                    client_id=client_id,
+                    action_id=result.get("recommended_action_id"),
+                )
+                return result
+        except Exception as exc:
+            logger.warning(
+                "llm_endpoint.claude_failed",
+                client_id=client_id,
+                error=str(exc),
+            )
+
+    # ── Fallback to pre-computed response ─────────────────────────────────────
+    fallback_dir = Path(__file__).parent.parent / "data" / "fallbacks"
+    _FALLBACK_MAP = {
+        "FINCORE_UK_001": "financecore_incident_response.json",
+        "RETAILMAX_EU_002": "retailmax_incident_response.json",
+    }
+    filename = _FALLBACK_MAP.get(client_id, f"{client_id.lower()}_incident_response.json")
+    fallback_path = fallback_dir / filename
+
+    if fallback_path.exists():
+        try:
+            with open(fallback_path, encoding="utf-8") as f:
+                data = _json.load(f)
+            logger.info(
+                "llm_endpoint.fallback_loaded",
+                client_id=client_id,
+                path=str(fallback_path),
+            )
+            return data
+        except Exception as exc:
+            logger.error("llm_endpoint.fallback_load_error", error=str(exc))
+
+    raise HTTPException(
+        status_code=503,
+        detail="LLM unavailable and no fallback found. Incident will be escalated to human review.",
+    )
+
+
+async def _call_claude(
+    request: LLMReasonRequest,
+    api_key: str,
+    client_id: str,
+) -> dict[str, Any] | None:
+    """Call Anthropic Claude with tool_use mode and return structured output."""
+    import json as _json
+    import httpx
+
+    prompt = _build_claude_prompt(request)
+
+    payload = {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 2048,
+        "tools": [_LLM_RESPONSE_SCHEMA],
+        "tool_choice": {"type": "tool", "name": "atlas_reasoning_output"},
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            json=payload,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.warning(
+            "llm_endpoint.anthropic_bad_status",
+            status=resp.status_code,
+            body=resp.text[:300],
+        )
+        return None
+
+    data = resp.json()
+    # Extract tool_use block
+    for block in data.get("content", []):
+        if block.get("type") == "tool_use" and block.get("name") == "atlas_reasoning_output":
+            return block.get("input", {})
+
+    return None
+
+
+def _build_claude_prompt(request: LLMReasonRequest) -> str:
+    """Build the ITIL 6-step reasoning prompt for Claude."""
+    import json as _json
+
+    evidence_text = _json.dumps(request.evidence_summary, indent=2)
+    deployments_text = _json.dumps(request.recent_deployments[:3], indent=2)
+    historical_text = _json.dumps(request.historical_graph_matches[:3], indent=2)
+    semantic_text = _json.dumps(request.semantic_matches, indent=2)
+    blast_text = _json.dumps(request.blast_radius[:5], indent=2)
+    compliance = request.compliance_profile
+
+    return f"""You are ATLAS, an AIOps platform performing ITIL-structured root cause analysis.
+
+INCIDENT CONTEXT:
+{_json.dumps(request.incident_context, indent=2)}
+
+EVIDENCE FROM SPECIALIST AGENTS:
+{evidence_text}
+
+BLAST RADIUS (affected services):
+{blast_text}
+
+RECENT DEPLOYMENTS (last 7 days):
+{deployments_text}
+
+HISTORICAL GRAPH MATCHES (same service + anomaly type):
+{historical_text}
+
+SEMANTIC SIMILARITY MATCHES (ChromaDB vector search):
+{semantic_text}
+
+COMPLIANCE PROFILE:
+- Frameworks: {compliance.get('compliance_frameworks', [])}
+- Max action class: {compliance.get('max_action_class', 1)}
+- Trust level: {compliance.get('trust_level', 0)}
+
+INSTRUCTIONS:
+{request.reasoning_instructions}
+
+Perform the 6-step ITIL analysis and call the atlas_reasoning_output tool with your structured findings.
+The recommended_action_id must be one of: connection-pool-recovery-v2, redis-memory-policy-rollback-v1
+The explanation_for_engineer must be at least 50 characters and written at L2 engineer level.
+Provide at least 2 alternative_hypotheses with evidence_for and evidence_against."""
+
+
+def _infer_action_id(request: LLMReasonRequest) -> str:
+    """Infer the correct action_id from evidence when Claude returns an invalid one."""
+    for pkg in request.evidence_summary:
+        anomaly = pkg.get("anomaly_type", "")
+        if anomaly in ("CONNECTION_POOL_EXHAUSTED", "DB_DEADLOCK", "DB_PANIC"):
+            return "connection-pool-recovery-v2"
+        if anomaly in ("REDIS_OOM", "REDIS_COMMAND_REJECTED"):
+            return "redis-memory-policy-rollback-v1"
+    return "connection-pool-recovery-v2"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Log ingest endpoint — POST /api/logs/ingest
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LogIngestPayload(BaseModel):
+    """Single log line from fault scripts or log generators."""
+    client_id: str
+    source: str
+    severity: str
+    line: str
+    timestamp: str = ""
+
+
+@app.post("/api/logs/ingest", status_code=status.HTTP_200_OK)
+async def ingest_log_line(payload: LogIngestPayload) -> dict[str, str]:
+    """
+    Accept a log line from fault scripts and broadcast it to WebSocket subscribers.
+    Also routes the event through the normaliser and into the agent event queue.
+    """
+    if not payload.client_id:
+        raise HTTPException(status_code=422, detail="client_id is required.")
+
+    ts = payload.timestamp or datetime.now(timezone.utc).isoformat()
+
+    # Broadcast to log WebSocket subscribers
+    await log_manager.send_to_client(payload.client_id, {
+        "type": "log_line",
+        "client_id": payload.client_id,
+        "source": payload.source,
+        "severity": payload.severity,
+        "line": payload.line,
+        "timestamp": ts,
+    })
+
+    # Route into the agent event queue for processing
+    try:
+        from backend.ingestion.normaliser import normalise
+        from backend.ingestion.event_queue import EventQueue
+
+        source_type = _infer_source_type(payload.source, payload.line)
+        raw_event = {
+            "client_id": payload.client_id,
+            "source_system": payload.source,
+            "source_type": source_type,
+            "severity": payload.severity,
+            "message": payload.line,
+            "raw_payload": payload.line,
+            "timestamp": ts,
+        }
+        normalised = normalise(raw_event)
+        if normalised:
+            eq = EventQueue()
+            await eq.enqueue(normalised, payload.client_id)
+    except Exception as exc:
+        logger.debug("log_ingest.queue_error", error=str(exc))
+
+    return {"status": "accepted"}
+
+
+def _infer_source_type(source: str, line: str) -> str:
+    """Infer source_type from source name and log line content."""
+    s = source.lower()
+    l = line.lower()
+    if "redis" in s:
+        return "redis"
+    if "postgres" in s or "transaction" in s or "pg" in s:
+        return "postgres"
+    if "node" in s or "cart" in s or "product" in s:
+        return "nodejs"
+    if "java" in l or "hikari" in l or "spring" in l or "payment" in s or "auth" in s:
+        return "java-spring-boot"
+    return "unknown"
+
 
 def _validate_client_id(client_id: str) -> None:
     """Raise HTTP 422 if client_id is not registered."""
