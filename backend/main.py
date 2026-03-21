@@ -558,20 +558,23 @@ async def get_audit_log(
 @app.get("/api/trust/{client_id}", status_code=status.HTTP_200_OK)
 async def get_trust_level(client_id: str) -> dict[str, Any]:
     """
-    Return trust level and progression metrics for a client.
+    Return trust level, progression metrics, and SLA uptime for a client.
     """
     _validate_client_id(client_id)
 
     from backend.config.client_registry import get_client
     from backend.learning.trust_progression import get_progression_metrics
+    from backend.database.audit_db import get_sla_uptime_percent
 
     client_config = get_client(client_id)
     metrics = get_progression_metrics(client_id)
+    sla_uptime = get_sla_uptime_percent(client_id)
 
     return {
         "client_id": client_id,
         "trust_level": client_config.get("trust_level", 0),
         "progression_metrics": metrics,
+        "sla_uptime_percent": sla_uptime,
     }
 
 
