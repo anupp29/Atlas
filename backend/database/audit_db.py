@@ -241,3 +241,52 @@ def export_as_json(client_id: str, date_from: datetime, date_to: datetime) -> st
 
     logger.info("audit_db.json_exported", path=path, records=len(records), client_id=client_id)
     return path
+
+
+def get_sla_uptime_percent(client_id: str) -> float:
+    """
+    Calculate SLA uptime percentage for a client from the audit log.
+    Uptime = 1 - (breach events / total resolution events).
+    Returns 100.0 if no resolution events exist yet (new client).
+
+    Args:
+        client_id: Client scope — mandatory.
+
+    Returns:
+        Float 0.0–100.0 representing SLA uptime percentage.
+    """
+    if not client_id:
+        raise ValueError("client_id is required for get_sla_uptime_percent.")
+
+    with _get_connection() as conn:
+        total_cursor = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM audit_log
+            WHERE client_id = ? AND action_type = 'resolution'
+            """,
+            (client_id,),
+        )
+        total = total_cursor.fetchone()["cnt"]
+
+        if total == 0:
+            return 100.0
+
+        breach_cursor = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM audit_log
+            WHERE client_id = ? AND action_type = 'resolution'
+            AND outcome LIKE '%sla_breach%'
+            """,
+            (client_id,),
+        )
+        breaches = breach_cursor.fetchone()["cnt"]
+
+    uptime = max(0.0, min(100.0, (1.0 - breaches / total) * 100.0))
+    logger.info(
+        "audit_db.sla_uptime_calculated",
+        client_id=client_id,
+        total_resolutions=total,
+        breaches=breaches,
+        uptime_percent=round(uptime, 4),
+    )
+    return round(uptime, 4)
