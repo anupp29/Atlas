@@ -56,7 +56,7 @@ export function ClientRoster({
   incidentCounts,
   healthStatuses,
 }: ClientRosterProps) {
-  const [trustData, setTrustData] = useState<Record<string, { trust_level: number; progression_metrics: { incident_count: number; accuracy_rate: number } }>>({})
+  const [trustData, setTrustData] = useState<Record<string, { trust_level: number; sla_uptime_percent: number; progression_metrics: { incident_count: number; accuracy_rate: number } }>>({})
 
   useEffect(() => {
     CLIENTS.forEach(c => {
@@ -81,6 +81,7 @@ export function ClientRoster({
           const incidentCount = incidentCounts[client.client_id] ?? 0
           const trust = trustData[client.client_id]
           const trustLevel = trust?.trust_level ?? client.trust_level
+          const slaUptime = trust?.sla_uptime_percent ?? client.sla_uptime_percent
           const stageName = TRUST_STAGE_LABELS[trustLevel] ?? client.trust_stage_name
           const isSelected = selectedClientId === client.client_id
           const progressPct = trustLevel >= 4 ? 100 : Math.min(
@@ -149,7 +150,7 @@ export function ClientRoster({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-zinc-500">SLA Uptime</span>
                 <span className="font-mono text-xs text-healthy font-medium">
-                  {client.sla_uptime_percent.toFixed(2)}%
+                  {slaUptime.toFixed(2)}%
                 </span>
               </div>
 

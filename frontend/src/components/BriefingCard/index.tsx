@@ -26,7 +26,12 @@ export function BriefingCard({ incident, viewMode, onApprove, onReject, onModify
   const topDeploy = incident.recent_deployments[0]
   const topMatch = incident.semantic_matches[0] ?? incident.historical_graph_matches[0]
   const priority = incident.incident_priority ?? 'P2'
-  const actionClass = incident.recommended_action_id?.includes('pool') ? 1 : 1
+  // Derive action class from playbook ID: pool/cache/config = Class 1, redeploy/scale = Class 2
+  const actionClass = (() => {
+    const id = incident.recommended_action_id ?? ''
+    if (id.includes('redeploy') || id.includes('scale') || id.includes('infra')) return 2
+    return 1
+  })()
   const { label: classLabel } = actionClassBadge(actionClass)
 
   return (

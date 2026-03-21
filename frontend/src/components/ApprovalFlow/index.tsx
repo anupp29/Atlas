@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { AtlasState } from '@/types/atlas'
+
+const SECONDARY_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes — matches token expiry
 
 interface ApprovalFlowProps {
   incident: AtlasState
@@ -20,6 +22,8 @@ export function ApprovalFlow({ incident, viewMode, onApprove, onReject, onModify
   const [modifyParams, setModifyParams] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [secondaryTimedOut, setSecondaryTimedOut] = useState(false)
+  const secondaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const needsDualApproval = incident.active_veto_conditions.some(v =>
     v.toLowerCase().includes('pci') || v.toLowerCase().includes('sox'),
@@ -33,13 +37,28 @@ export function ApprovalFlow({ incident, viewMode, onApprove, onReject, onModify
     setError(null)
     try {
       await onApprove(incident.thread_id, incident.incident_id, incident.client_id)
-      setFlowState(needsDualApproval ? 'awaiting_secondary' : 'executing')
+      if (needsDualApproval) {
+        setFlowState('awaiting_secondary')
+        // Fire timeout alert after 30 minutes — matches token expiry in approval_tokens.py
+        secondaryTimerRef.current = setTimeout(() => {
+          setSecondaryTimedOut(true)
+        }, SECONDARY_TIMEOUT_MS)
+      } else {
+        setFlowState('executing')
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Approval failed')
     } finally {
       setLoading(false)
     }
   }
+
+  // Clean up secondary timer on unmount
+  useEffect(() => {
+    return () => {
+      if (secondaryTimerRef.current) clearTimeout(secondaryTimerRef.current)
+    }
+  }, [])
 
   const handleReject = async () => {
     if (rejectReason.length < 20) return
@@ -122,14 +141,22 @@ export function ApprovalFlow({ incident, viewMode, onApprove, onReject, onModify
             animate={{ opacity: 1, y: 0 }}
             className="rounded-lg border border-blue-800 bg-blue-950/30 p-4 space-y-2"
           >
-            <div className="flex items-center gap-2 text-sm text-blue-300 font-medium">
-              <span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-              Awaiting secondary approval
-            </div>
-            <p className="text-xs text-zinc-400">
-              ✓ Primary approval recorded — Slack notification sent to secondary approver
-            </p>
-            <p className="text-xs text-zinc-500">Token expires in 30 minutes</p>
+            {secondaryTimedOut ? (
+              <div className="rounded-md border border-red-800 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+                ⚠ Secondary approval token expired after 30 minutes — re-initiate approval or escalate to L3
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-sm text-blue-300 font-medium">
+                  <span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  Awaiting secondary approval
+                </div>
+                <p className="text-xs text-zinc-400">
+                  ✓ Primary approval recorded — Slack notification sent to secondary approver
+                </p>
+                <p className="text-xs text-zinc-500">Token expires in 30 minutes</p>
+              </>
+            )}
           </motion.div>
         )}
 

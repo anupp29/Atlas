@@ -110,6 +110,12 @@ export function PostResolution({ incident }: PostResolutionProps) {
             />
             <ReferenceLine y={85} stroke="#EF4444" strokeDasharray="4 2" label={{ value: 'Alert', fill: '#EF4444', fontSize: 10 }} />
             <ReferenceLine y={30} stroke="#10B981" strokeDasharray="4 2" label={{ value: 'Baseline', fill: '#10B981', fontSize: 10 }} />
+            <ReferenceLine
+              x={ATLASSIAN_BENCHMARK_SECONDS}
+              stroke="#F59E0B"
+              strokeDasharray="6 3"
+              label={{ value: 'Industry median 43m', fill: '#F59E0B', fontSize: 10, position: 'insideTopRight' }}
+            />
             <Line
               type="monotone"
               dataKey="value"

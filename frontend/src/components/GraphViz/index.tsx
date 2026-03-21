@@ -238,8 +238,29 @@ export function GraphViz({ incident }: GraphVizProps) {
   )
 }
 
-/** Static SVG fallback when react-force-graph-2d fails */
+/** Static SVG fallback when react-force-graph-2d fails — also plays pre-recorded video if available */
 function FallbackGraph({ nodes, links }: { nodes: GNode[]; links: GLink[] }) {
+  // Attempt to load pre-recorded animation video (recorded during testing per PLAN.md Task 6.3)
+  const videoSrc = '/fallback/graph_animation.mp4'
+  const [videoFailed, setVideoFailed] = useState(false)
+
+  if (!videoFailed) {
+    return (
+      <div className="rounded-lg border border-border bg-[#080C14] overflow-hidden">
+        <video
+          src={videoSrc}
+          autoPlay
+          loop
+          muted
+          playsInline
+          onError={() => setVideoFailed(true)}
+          className="w-full"
+          style={{ maxHeight: 320 }}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="rounded-lg border border-border bg-[#080C14] p-4">
       <p className="text-xs text-zinc-500 mb-3">Graph (static view)</p>
