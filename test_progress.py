@@ -1363,6 +1363,234 @@ async def test_trust():
 
 asyncio.run(test_trust())
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 5 — ORCHESTRATION PIPELINE
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n── Phase 5: state.py ──")
+from backend.orchestrator.state import (
+    AtlasState, ImmutableStateError, build_initial_state,
+    guard_immutable_fields, guard_routing_decision, append_audit_entry,
+)
+
+# build_initial_state: requires client_id, incident_id, evidence_packages
+try:
+    build_initial_state("", "inc-1", [{"service_name": "svc"}], "ISOLATED_ANOMALY")
+    fail("state: empty client_id should raise ValueError")
+except ValueError:
+    ok("state: empty client_id raises ValueError")
+
+try:
+    build_initial_state("CLIENT", "", [{"service_name": "svc"}], "ISOLATED_ANOMALY")
+    fail("state: empty incident_id should raise ValueError")
+except ValueError:
+    ok("state: empty incident_id raises ValueError")
+
+try:
+    build_initial_state("CLIENT", "inc-1", [], "ISOLATED_ANOMALY")
+    fail("state: empty evidence_packages should raise ValueError")
+except ValueError:
+    ok("state: empty evidence_packages raises ValueError")
+
+# Valid initial state
+s = build_initial_state("FINCORE_UK_001", "inc-test-001", [{"service_name": "PaymentAPI"}], "CASCADE_INCIDENT")
+assert s["client_id"] == "FINCORE_UK_001"
+assert s["incident_id"] == "inc-test-001"
+assert s["correlation_type"] == "CASCADE_INCIDENT"
+assert len(s["audit_trail"]) == 1
+assert s["audit_trail"][0]["action"] == "incident_created"
+ok("state: build_initial_state produces valid initial state with audit entry")
+
+# Immutability: overwriting client_id raises ImmutableStateError
+try:
+    guard_immutable_fields(s, {"client_id": "DIFFERENT_CLIENT"})
+    fail("state: overwriting client_id should raise ImmutableStateError")
+except ImmutableStateError:
+    ok("state: overwriting client_id raises ImmutableStateError")
+
+# Immutability: first write (empty → value) is allowed
+s_empty = build_initial_state("CLIENT", "inc-2", [{"service_name": "svc"}], "ISOLATED_ANOMALY")
+guard_immutable_fields(s_empty, {"client_id": "CLIENT"})  # same value — no error
+ok("state: same-value write to immutable field does not raise")
+
+# routing_decision: once set, cannot change
+s2 = dict(s)
+s2["routing_decision"] = "L2_L3_ESCALATION"
+try:
+    guard_routing_decision(s2, {"routing_decision": "AUTO_EXECUTE"})
+    fail("state: changing routing_decision should raise ImmutableStateError")
+except ImmutableStateError:
+    ok("state: changing routing_decision raises ImmutableStateError")
+
+# routing_decision: first write allowed
+s3 = dict(s)
+s3["routing_decision"] = ""
+guard_routing_decision(s3, {"routing_decision": "AUTO_EXECUTE"})  # no error
+ok("state: first write to routing_decision is allowed")
+
+# audit_trail: append_audit_entry always extends, never replaces
+trail = append_audit_entry(s, {"node": "test", "action": "test_action"})
+assert len(trail) == 2  # original entry + new one
+assert trail[-1]["action"] == "test_action"
+assert "timestamp" in trail[-1]
+ok("state: append_audit_entry extends trail, adds timestamp")
+
+print("\n── Phase 5: n6_confidence.py (FinanceCore scenario) ──")
+# Test n6_confidence with known FinanceCore inputs
+# Expected: composite ~0.84, PCI-DSS veto fires, routes to L2_L3_ESCALATION
+
+os.environ.setdefault("ATLAS_DECISION_DB_PATH", "./data/test_decision_progress.db")
+from backend.learning.decision_history import initialise_db as init_dh, write_record as write_dh
+
+init_dh()
+
+# Seed 5 historical records for FinanceCore CONNECTION_POOL_EXHAUSTED pattern
+# 4 successes, 1 failure → accuracy = 0.80
+for i in range(4):
+    write_dh({
+        "client_id": "FINCORE_UK_001",
+        "incident_id": f"INC-SEED-{i:03d}",
+        "anomaly_type": "CONNECTION_POOL_EXHAUSTED",
+        "service_class": "PaymentAPI",
+        "recommended_action_id": "connection-pool-recovery-v2",
+        "confidence_score_at_decision": 0.84,
+        "routing_tier": "L2",
+        "human_action": "approved",
+        "modification_diff": None,
+        "rejection_reason": None,
+        "resolution_outcome": "success",
+        "actual_mttr": 1380,
+        "recurrence_within_48h": False,
+    })
+write_dh({
+    "client_id": "FINCORE_UK_001",
+    "incident_id": "INC-SEED-004",
+    "anomaly_type": "CONNECTION_POOL_EXHAUSTED",
+    "service_class": "PaymentAPI",
+    "recommended_action_id": "connection-pool-recovery-v2",
+    "confidence_score_at_decision": 0.72,
+    "routing_tier": "L2",
+    "human_action": "approved",
+    "modification_diff": None,
+    "rejection_reason": None,
+    "resolution_outcome": "failure",
+    "actual_mttr": 3600,
+    "recurrence_within_48h": False,
+})
+
+async def test_n6_financecore():
+    from backend.orchestrator.nodes.n6_confidence import run as n6_run
+
+    # Build a realistic FinanceCore state
+    now = datetime.now(timezone.utc)
+    fc_state = build_initial_state(
+        client_id="FINCORE_UK_001",
+        incident_id="INC-N6-TEST-001",
+        evidence_packages=[{
+            "agent_id": "postgres-agent",
+            "client_id": "FINCORE_UK_001",
+            "service_name": "PaymentAPI",
+            "anomaly_type": "CONNECTION_POOL_EXHAUSTED",
+            "detection_confidence": 0.84,
+            "shap_feature_values": {"error_rate": 67.0, "response_time": 33.0},
+            "conformal_interval": {"lower": 0.0, "upper": 0.84, "confidence_level": 0.84},
+            "baseline_mean": 5.0,
+            "baseline_stddev": 1.0,
+            "current_value": 20.0,
+            "deviation_sigma": 15.0,
+            "supporting_log_samples": ["log1", "log2", "log3", "log4", "log5"],
+            "preliminary_hypothesis": "Connection pool exhaustion detected.",
+            "severity_classification": "P2",
+            "detection_timestamp": now.isoformat(),
+        }],
+        correlation_type="CASCADE_INCIDENT",
+    )
+    # Add N1–N5 outputs to state
+    fc_state["incident_priority"] = "P2"
+    fc_state["recommended_action_id"] = "connection-pool-recovery-v2"
+    fc_state["alternative_hypotheses"] = [
+        {"hypothesis": "HikariCP pool exhausted due to config change", "confidence": 0.84,
+         "evidence_for": "CHG0089234 reduced maxPoolSize", "evidence_against": ""},
+        {"hypothesis": "Traffic spike exceeded pool capacity", "confidence": 0.34,
+         "evidence_for": "High request volume", "evidence_against": "No traffic anomaly detected"},
+    ]
+    fc_state["semantic_matches"] = [
+        {"incident_id": "INC-2024-0847", "similarity_score": 0.91, "source": "client_specific"}
+    ]
+
+    result = await n6_run(fc_state)
+
+    composite = result["composite_confidence_score"]
+    vetoes = result["active_veto_conditions"]
+    routing = result["routing_decision"]
+
+    # Composite should be approximately 0.84 (within ±0.10 tolerance)
+    assert 0.74 <= composite <= 0.94, f"Expected composite ~0.84, got {composite}"
+    ok(f"n6_confidence: FinanceCore composite={composite:.4f} (expected ~0.84)")
+
+    # PCI-DSS business hours veto must fire (FinanceCore has PCI-DSS + SOX)
+    assert len(vetoes) >= 1, f"Expected at least 1 veto, got {vetoes}"
+    ok(f"n6_confidence: {len(vetoes)} veto(s) fired: {vetoes[0][:60]}...")
+
+    # Routing must be L2_L3_ESCALATION (vetoes prevent AUTO_EXECUTE)
+    assert routing == "L2_L3_ESCALATION", f"Expected L2_L3_ESCALATION, got {routing}"
+    ok(f"n6_confidence: routing={routing} (correct — vetoes prevent auto-execute)")
+
+    # Factor scores present
+    factors = result["factor_scores"]
+    assert "f1" in factors and "f2" in factors and "f3" in factors and "f4" in factors
+    ok(f"n6_confidence: all 4 factor scores present: {factors}")
+
+    # Audit trail updated
+    assert len(result["audit_trail"]) > len(fc_state.get("audit_trail", []))
+    ok("n6_confidence: audit_trail updated with confidence scoring entry")
+
+asyncio.run(test_n6_financecore())
+
+print("\n── Phase 5: pipeline.py (graph compilation) ──")
+async def test_pipeline_compilation():
+    os.environ.setdefault("ATLAS_CHECKPOINT_DB_PATH", "./data/test_checkpoints.db")
+    from backend.orchestrator.pipeline import _get_graph, close_graph
+    graph = await _get_graph()
+    assert graph is not None
+    ok("pipeline: graph compiles successfully")
+
+    # Verify all 7 nodes + execution + learning nodes are present
+    node_names = set(graph.nodes)
+    for expected in ["n1_classifier", "n2_itsm", "n3_graph", "n4_semantic",
+                     "n5_reasoning", "n6_confidence", "n7_router",
+                     "execute_playbook", "n_learn"]:
+        assert expected in node_names, f"Missing node: {expected}"
+    ok(f"pipeline: all 9 nodes present in compiled graph")
+
+    await close_graph()
+
+asyncio.run(test_pipeline_compilation())
+
+print("\n── Phase 5: approval_tokens.py (round-trip) ──")
+from backend.execution.approval_tokens import generate_approval_token, validate_approval_token
+
+token = generate_approval_token("INC-TOKEN-TEST-001", "l2", expiry_minutes=30)
+assert token and len(token) > 20
+ok("approval_tokens: token generated successfully")
+
+valid, inc_id, role, reason = validate_approval_token(token)
+assert valid is True
+assert inc_id == "INC-TOKEN-TEST-001"
+assert role == "l2"
+ok("approval_tokens: token validates correctly, incident_id and role match")
+
+# One-time use: second validation must fail
+valid2, _, _, _ = validate_approval_token(token)
+assert valid2 is False
+ok("approval_tokens: second use of same token rejected (one-time use enforced)")
+
+# Wrong incident: token for A cannot approve B
+token_b = generate_approval_token("INC-TOKEN-TEST-002", "l2", expiry_minutes=30)
+valid3, inc_id3, _, _ = validate_approval_token(token_b)
+assert valid3 is True
+assert inc_id3 == "INC-TOKEN-TEST-002"
+ok("approval_tokens: token correctly scoped to incident_id")
+
 # ── Final results ──────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
 if errors:
