@@ -179,11 +179,45 @@ class IsolationForestDetector:
         prediction = int(self._model.predict(X)[0])
         is_anomaly = prediction == -1
 
+        # Z-score override: catch extreme outliers that IF may miss when training
+        # data has near-zero variance (e.g. all identical baseline observations).
+        zscore_override = False
+        zscore_contributions: dict[str, float] = {}
+        if not is_anomaly and len(self._baseline_observations) >= 10:
+            baseline = np.array(self._baseline_observations, dtype=np.float32)
+            means = baseline.mean(axis=0)
+            stds = baseline.std(axis=0)
+            stds = np.where(stds < 1e-6, 1e-6, stds)
+            current = np.array(vector, dtype=np.float32)
+            z_scores = np.abs((current - means) / stds)
+            if float(z_scores.max()) > 5.0:
+                is_anomaly = True
+                zscore_override = True
+                # Build feature contributions from z-scores (normalised to 100%)
+                total_z = float(z_scores.sum())
+                if total_z > 0:
+                    pcts = (z_scores / total_z * 100.0).tolist()
+                    zscore_contributions = {
+                        name: round(pct, 2)
+                        for name, pct in zip(self.FEATURE_NAMES, pcts)
+                    }
+                    # Fix floating point drift
+                    diff = 100.0 - sum(zscore_contributions.values())
+                    if zscore_contributions:
+                        first_key = next(iter(zscore_contributions))
+                        zscore_contributions[first_key] = round(
+                            zscore_contributions[first_key] + diff, 2
+                        )
+
         shap_values: dict[str, float] = {}
         shap_failed = False
 
         if is_anomaly:
-            shap_values, shap_failed = self._compute_shap(X)
+            if zscore_override:
+                shap_values = zscore_contributions
+                shap_failed = not bool(shap_values)
+            else:
+                shap_values, shap_failed = self._compute_shap(X)
 
         return {
             "is_anomaly": is_anomaly,
