@@ -1,7 +1,11 @@
 """
 SQLite audit database for ATLAS.
-Manages audit_log and decision_history tables.
-All records are immutable after writing — no update or delete methods exist.
+Manages the audit_log table only — the compliance and operational audit trail.
+
+Decision history (learning engine memory) is managed exclusively by
+backend/learning/decision_history.py in its own database.
+
+All audit records are immutable after writing — no update or delete methods exist.
 """
 
 from __future__ import annotations
@@ -21,15 +25,25 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _DB_PATH_ENV = "ATLAS_AUDIT_DB_PATH"
-_DEFAULT_DB_PATH = "./data/atlas_audit.db"
 
 
 def _get_db_path() -> str:
-    return os.environ.get(_DB_PATH_ENV, _DEFAULT_DB_PATH)
+    """
+    Resolve the audit database path from environment variables.
+    Raises RuntimeError if the variable is not set — no hardcoded defaults.
+    """
+    path = os.environ.get(_DB_PATH_ENV)
+    if not path:
+        raise RuntimeError(
+            f"Environment variable '{_DB_PATH_ENV}' is not set. "
+            "ATLAS cannot start without an audit database path."
+        )
+    return path
 
 
 @contextmanager
 def _get_connection() -> Generator[sqlite3.Connection, None, None]:
+    """Open a WAL-mode SQLite connection with row factory."""
     path = _get_db_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
@@ -43,7 +57,10 @@ def _get_connection() -> Generator[sqlite3.Connection, None, None]:
 
 
 def initialise_db() -> None:
-    """Create tables if they do not exist. Idempotent."""
+    """
+    Create the audit_log table if it does not exist. Idempotent.
+    Called once on application startup.
+    """
     with _get_connection() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS audit_log (
@@ -62,29 +79,9 @@ def initialise_db() -> None:
                 compliance_frameworks_applied TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS decision_history (
-                record_id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                incident_id TEXT NOT NULL,
-                anomaly_type TEXT NOT NULL,
-                service_class TEXT NOT NULL,
-                recommended_action_id TEXT NOT NULL,
-                confidence_score_at_decision REAL NOT NULL,
-                routing_tier TEXT NOT NULL,
-                human_action TEXT NOT NULL,
-                modification_diff TEXT,
-                rejection_reason TEXT,
-                resolution_outcome TEXT NOT NULL,
-                actual_mttr INTEGER NOT NULL,
-                recurrence_within_48h INTEGER DEFAULT 0,
-                timestamp TEXT NOT NULL
-            );
-
             CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log(client_id);
             CREATE INDEX IF NOT EXISTS idx_audit_incident ON audit_log(incident_id);
-            CREATE INDEX IF NOT EXISTS idx_decision_pattern ON decision_history(
-                client_id, anomaly_type, service_class, recommended_action_id
-            );
+            CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
         """)
         conn.commit()
     logger.info("audit_db.initialised", path=_get_db_path())
@@ -92,21 +89,25 @@ def initialise_db() -> None:
 
 def write_audit_record(record: dict[str, Any]) -> str:
     """
-    Insert an immutable audit record.
+    Insert an immutable audit record into the audit_log table.
 
     Args:
-        record: Dict with audit_log fields. 'client_id' and 'incident_id' are required.
+        record: Dict with audit_log fields. 'client_id', 'incident_id',
+                'action_type', 'actor', and 'action_description' are required.
 
     Returns:
-        The generated record_id.
+        The generated record_id UUID.
 
     Raises:
-        ValueError: If required fields are missing.
+        ValueError: If required fields are missing or client_id is empty.
     """
     required = {"client_id", "incident_id", "action_type", "actor", "action_description"}
     missing = required - record.keys()
     if missing:
         raise ValueError(f"audit_record missing required fields: {missing}")
+
+    if not record["client_id"]:
+        raise ValueError("client_id cannot be empty — multi-tenancy enforcement.")
 
     record_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -148,163 +149,25 @@ def write_audit_record(record: dict[str, Any]) -> str:
     return record_id
 
 
-def write_decision_record(record: dict[str, Any]) -> str:
-    """
-    Insert an immutable decision history record.
-
-    Args:
-        record: Dict with decision_history fields. All required fields must be present.
-
-    Returns:
-        The generated record_id.
-
-    Raises:
-        ValueError: If required fields are missing.
-    """
-    required = {
-        "client_id", "incident_id", "anomaly_type", "service_class",
-        "recommended_action_id", "confidence_score_at_decision",
-        "routing_tier", "human_action", "resolution_outcome", "actual_mttr",
-    }
-    missing = required - record.keys()
-    if missing:
-        raise ValueError(f"decision_record missing required fields: {missing}")
-
-    record_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-
-    with _get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO decision_history (
-                record_id, client_id, incident_id, anomaly_type, service_class,
-                recommended_action_id, confidence_score_at_decision, routing_tier,
-                human_action, modification_diff, rejection_reason, resolution_outcome,
-                actual_mttr, recurrence_within_48h, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record_id,
-                record["client_id"],
-                record["incident_id"],
-                record["anomaly_type"],
-                record["service_class"],
-                record["recommended_action_id"],
-                record["confidence_score_at_decision"],
-                record["routing_tier"],
-                record["human_action"],
-                json.dumps(record.get("modification_diff")) if record.get("modification_diff") else None,
-                record.get("rejection_reason"),
-                record["resolution_outcome"],
-                record["actual_mttr"],
-                int(record.get("recurrence_within_48h", False)),
-                record.get("timestamp", now),
-            ),
-        )
-        conn.commit()
-
-    logger.info(
-        "audit_db.decision_written",
-        record_id=record_id,
-        client_id=record["client_id"],
-        outcome=record["resolution_outcome"],
-    )
-    return record_id
-
-
-def get_records_for_pattern(
-    client_id: str,
-    anomaly_type: str,
-    service_class: str,
-    action_id: str,
-) -> list[dict[str, Any]]:
-    """
-    Query all decision history records matching a pattern/action/client triple.
-
-    Args:
-        client_id: Client scope.
-        anomaly_type: e.g. 'CONNECTION_POOL_EXHAUSTED'
-        service_class: e.g. 'java-spring-boot'
-        action_id: Playbook ID e.g. 'connection-pool-recovery-v2'
-
-    Returns:
-        List of record dicts.
-    """
-    with _get_connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT * FROM decision_history
-            WHERE client_id = ? AND anomaly_type = ?
-              AND service_class = ? AND recommended_action_id = ?
-            ORDER BY timestamp DESC
-            """,
-            (client_id, anomaly_type, service_class, action_id),
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
-
-    for row in rows:
-        if row.get("modification_diff"):
-            try:
-                row["modification_diff"] = json.loads(row["modification_diff"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    return rows
-
-
-def get_accuracy_rate(
-    client_id: str,
-    anomaly_type: str,
-    service_class: str,
-    action_id: str,
-) -> tuple[float, int]:
-    """
-    Calculate empirical success rate for a pattern/action/client triple.
-
-    Returns:
-        Tuple of (accuracy_rate, record_count).
-        Returns (0.50, 0) if no records exist.
-    """
-    records = get_records_for_pattern(client_id, anomaly_type, service_class, action_id)
-    if not records:
-        return 0.50, 0
-
-    successes = sum(
-        1 for r in records
-        if r.get("resolution_outcome") == "success"
-        and not r.get("recurrence_within_48h", False)
-    )
-    return successes / len(records), len(records)
-
-
-def mark_recurrence(incident_id: str, client_id: str) -> None:
-    """
-    Mark the original resolution as recurrence_within_48h=True.
-    Called 48 hours after resolution if the same pattern reappears.
-
-    Args:
-        incident_id: The original incident ID.
-        client_id: Client scope for validation.
-    """
-    with _get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE decision_history
-            SET recurrence_within_48h = 1
-            WHERE incident_id = ? AND client_id = ?
-            """,
-            (incident_id, client_id),
-        )
-        conn.commit()
-    logger.info("audit_db.recurrence_marked", incident_id=incident_id, client_id=client_id)
-
-
 def query_audit(
     client_id: str,
     date_from: datetime,
     date_to: datetime,
 ) -> list[dict[str, Any]]:
-    """Query audit records for a client within a date range."""
+    """
+    Query audit records for a client within a date range.
+
+    Args:
+        client_id:  Client scope — mandatory.
+        date_from:  Start of date range (inclusive).
+        date_to:    End of date range (inclusive).
+
+    Returns:
+        List of audit record dicts ordered by timestamp ascending.
+    """
+    if not client_id:
+        raise ValueError("client_id is required for query_audit.")
+
     with _get_connection() as conn:
         cursor = conn.execute(
             """
@@ -314,16 +177,38 @@ def query_audit(
             """,
             (client_id, date_from.isoformat(), date_to.isoformat()),
         )
-        return [dict(r) for r in cursor.fetchall()]
+        rows = [dict(r) for r in cursor.fetchall()]
+
+    for row in rows:
+        if row.get("compliance_frameworks_applied"):
+            try:
+                row["compliance_frameworks_applied"] = json.loads(
+                    row["compliance_frameworks_applied"]
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return rows
 
 
 def export_as_csv(client_id: str, date_from: datetime, date_to: datetime) -> str:
-    """Export audit records as CSV. Returns the file path."""
+    """
+    Export audit records as CSV.
+
+    Args:
+        client_id:  Client scope — mandatory.
+        date_from:  Start of date range.
+        date_to:    End of date range.
+
+    Returns:
+        File path of the exported CSV.
+    """
     records = query_audit(client_id, date_from, date_to)
     path = f"./data/exports/audit_{client_id}_{date_from.date()}_{date_to.date()}.csv"
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
     if not records:
+        logger.info("audit_db.csv_exported_empty", path=path, client_id=client_id)
         return path
 
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -331,12 +216,22 @@ def export_as_csv(client_id: str, date_from: datetime, date_to: datetime) -> str
         writer.writeheader()
         writer.writerows(records)
 
-    logger.info("audit_db.csv_exported", path=path, records=len(records))
+    logger.info("audit_db.csv_exported", path=path, records=len(records), client_id=client_id)
     return path
 
 
 def export_as_json(client_id: str, date_from: datetime, date_to: datetime) -> str:
-    """Export audit records as JSON. Returns the file path."""
+    """
+    Export audit records as JSON.
+
+    Args:
+        client_id:  Client scope — mandatory.
+        date_from:  Start of date range.
+        date_to:    End of date range.
+
+    Returns:
+        File path of the exported JSON.
+    """
     records = query_audit(client_id, date_from, date_to)
     path = f"./data/exports/audit_{client_id}_{date_from.date()}_{date_to.date()}.json"
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -344,5 +239,5 @@ def export_as_json(client_id: str, date_from: datetime, date_to: datetime) -> st
     with open(path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, default=str)
 
-    logger.info("audit_db.json_exported", path=path, records=len(records))
+    logger.info("audit_db.json_exported", path=path, records=len(records), client_id=client_id)
     return path

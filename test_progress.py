@@ -206,6 +206,7 @@ except KeyError:
 
 print("\n── Phase 2: audit_db.py ──")
 os.environ.setdefault("ATLAS_AUDIT_DB_PATH", "./data/test_audit_progress.db")
+os.environ.setdefault("ATLAS_DECISION_DB_PATH", "./data/test_decision_progress.db")
 from backend.database import audit_db
 audit_db.initialise_db()
 
@@ -231,43 +232,13 @@ records = audit_db.query_audit(
 assert any(r["record_id"] == rid for r in records)
 ok("audit_db: written record readable via query_audit")
 
-# Write decision record
-drid = audit_db.write_decision_record({
-    "client_id": "FINCORE_UK_001",
-    "incident_id": "INC-TEST-001",
-    "anomaly_type": "CONNECTION_POOL_EXHAUSTED",
-    "service_class": "java-spring-boot",
-    "recommended_action_id": "connection-pool-recovery-v2",
-    "confidence_score_at_decision": 0.84,
-    "routing_tier": "L2",
-    "human_action": "approved",
-    "resolution_outcome": "success",
-    "actual_mttr": 420,
-})
-assert drid is not None
-ok("audit_db: write_decision_record returns valid UUID")
-
-# Pattern query
-pattern_records = audit_db.get_records_for_pattern(
-    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
-    "java-spring-boot", "connection-pool-recovery-v2",
-)
-assert len(pattern_records) >= 1
-ok("audit_db: get_records_for_pattern returns matching records")
-
-# Accuracy rate
-rate, count = audit_db.get_accuracy_rate(
-    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
-    "java-spring-boot", "connection-pool-recovery-v2",
-)
-assert count >= 1
-assert 0.0 <= rate <= 1.0
-ok("audit_db: get_accuracy_rate returns valid rate")
-
-# Immutability: no update/delete methods
+# Immutability: no update/delete methods on audit_log
 assert not hasattr(audit_db, "update_audit_record"), "update method must not exist"
 assert not hasattr(audit_db, "delete_audit_record"), "delete method must not exist"
-ok("audit_db: immutable — no update/delete methods")
+# Decision history methods belong exclusively to decision_history.py — not audit_db
+assert not hasattr(audit_db, "write_decision_record"), "write_decision_record must not exist in audit_db"
+assert not hasattr(audit_db, "get_records_for_pattern"), "get_records_for_pattern must not exist in audit_db"
+ok("audit_db: immutable audit_log only — no update/delete, no decision_history methods")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 3 — DETECTION ENSEMBLE
@@ -1027,6 +998,370 @@ async def test_correlation_flush():
         ok("correlation_engine: missing client_id raises ValueError")
 
 asyncio.run(test_correlation_flush())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 4 — EXECUTION ENGINE AND LEARNING
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n── Phase 4: playbook_library.py ──")
+from backend.execution.playbook_library import (
+    get_playbook, validate_action_id, list_playbooks,
+    get_playbooks_for_anomaly, semantic_search,
+)
+
+# All four playbooks registered
+pbs = list_playbooks()
+pb_ids = {pb.playbook_id for pb in pbs}
+assert "connection-pool-recovery-v2" in pb_ids
+assert "connection-pool-recovery-v2-rollback" in pb_ids
+assert "redis-memory-policy-rollback-v1" in pb_ids
+assert "redis-memory-policy-rollback-v1-rollback" in pb_ids
+ok("playbook_library: all 4 playbooks registered")
+
+# Class 3 never auto_execute_eligible
+for pb in pbs:
+    if pb.action_class == 3:
+        assert not pb.auto_execute_eligible, f"{pb.playbook_id} is Class 3 but auto_execute_eligible=True"
+ok("playbook_library: no Class 3 playbook is auto_execute_eligible")
+
+# Rollback IDs point to real entries
+for pb in pbs:
+    if pb.rollback_playbook_id is not None:
+        assert validate_action_id(pb.rollback_playbook_id), \
+            f"{pb.playbook_id} rollback_id '{pb.rollback_playbook_id}' not in registry"
+ok("playbook_library: all rollback_playbook_ids point to real entries")
+
+# get_playbook returns correct metadata
+pb_cp = get_playbook("connection-pool-recovery-v2")
+assert pb_cp is not None
+assert pb_cp.action_class == 1
+assert pb_cp.auto_execute_eligible is True
+assert pb_cp.target_technology == "java-spring-boot"
+assert "CONNECTION_POOL_EXHAUSTED" in pb_cp.anomaly_types_addressed
+ok("playbook_library: connection-pool-recovery-v2 metadata correct")
+
+# get_playbook unknown → None (no exception)
+assert get_playbook("nonexistent-playbook") is None
+ok("playbook_library: unknown playbook_id → None, no exception")
+
+# validate_action_id
+assert validate_action_id("connection-pool-recovery-v2") is True
+assert validate_action_id("redis-memory-policy-rollback-v1") is True
+assert validate_action_id("does-not-exist") is False
+ok("playbook_library: validate_action_id correct for known and unknown IDs")
+
+# get_playbooks_for_anomaly
+cp_pbs = get_playbooks_for_anomaly("CONNECTION_POOL_EXHAUSTED")
+assert any(pb.playbook_id == "connection-pool-recovery-v2" for pb in cp_pbs)
+redis_pbs = get_playbooks_for_anomaly("REDIS_OOM")
+assert any(pb.playbook_id == "redis-memory-policy-rollback-v1" for pb in redis_pbs)
+ok("playbook_library: get_playbooks_for_anomaly returns correct playbooks")
+
+# semantic_search returns results
+results = semantic_search("connection pool hikari exhausted")
+assert len(results) > 0
+assert results[0].playbook_id == "connection-pool-recovery-v2"
+ok("playbook_library: semantic_search returns relevant results")
+
+print("\n── Phase 4: approval_tokens.py ──")
+os.environ.setdefault("ATLAS_SECRET_KEY", "atlas-dev-secret-key-change-in-production-min-32-chars")
+from backend.execution.approval_tokens import generate_approval_token, validate_approval_token
+
+# Generate and validate a token
+token = generate_approval_token("INC-TEST-001", "l2", expiry_minutes=30)
+assert token is not None and len(token) > 20
+ok("approval_tokens: generate_approval_token returns non-empty token")
+
+valid, incident_id, approver_role, reason = validate_approval_token(token)
+assert valid is True
+assert incident_id == "INC-TEST-001"
+assert approver_role == "l2"
+ok("approval_tokens: validate_approval_token returns valid=True, correct incident_id and role")
+
+# One-time use: second validation of same token fails
+valid2, _, _, _ = validate_approval_token(token)
+assert valid2 is False
+ok("approval_tokens: token is one-time use — second validation returns valid=False")
+
+# Token for incident A cannot approve incident B
+token_b = generate_approval_token("INC-TEST-002", "l2", expiry_minutes=30)
+valid_b, inc_b, _, _ = validate_approval_token(token_b)
+assert valid_b is True
+assert inc_b == "INC-TEST-002"
+ok("approval_tokens: token encodes incident_id — cannot be used cross-incident")
+
+# Expired token fails
+import time as _time
+token_exp = generate_approval_token("INC-EXP-001", "l2", expiry_minutes=0)
+_time.sleep(0.1)
+valid_exp, _, _, _ = validate_approval_token(token_exp)
+assert valid_exp is False
+ok("approval_tokens: expired token (0 min) returns valid=False")
+
+# Missing secret key raises RuntimeError
+# Missing/short secret key raises RuntimeError at token generation
+old_key = os.environ.get("ATLAS_SECRET_KEY")
+os.environ["ATLAS_SECRET_KEY"] = "short"
+try:
+    # Re-import to trigger key reload — use importlib
+    import importlib
+    import backend.execution.approval_tokens as _at_mod
+    importlib.reload(_at_mod)
+    _at_mod.generate_approval_token("INC-X", "l2")
+    fail("approval_tokens: short ATLAS_SECRET_KEY should raise RuntimeError")
+except RuntimeError:
+    ok("approval_tokens: short ATLAS_SECRET_KEY raises RuntimeError")
+finally:
+    if old_key:
+        os.environ["ATLAS_SECRET_KEY"] = old_key
+    else:
+        os.environ.pop("ATLAS_SECRET_KEY", None)
+    # Reload with correct key to restore module state
+    importlib.reload(_at_mod)
+
+print("\n── Phase 4: decision_history.py ──")
+import uuid as _uuid_mod
+os.environ["ATLAS_DECISION_DB_PATH"] = f"./data/test_decision_{_uuid_mod.uuid4().hex[:8]}.db"
+from backend.learning.decision_history import (
+    initialise_db as dh_init, write_record, get_records_for_pattern,
+    get_accuracy_rate as dh_accuracy, mark_recurrence,
+    get_incident_count_for_client, get_auto_resolution_rate,
+)
+
+dh_init()
+
+# Write a record
+rec_id = write_record({
+    "client_id": "FINCORE_UK_001",
+    "incident_id": "INC-DH-001",
+    "anomaly_type": "CONNECTION_POOL_EXHAUSTED",
+    "service_class": "java-spring-boot",
+    "recommended_action_id": "connection-pool-recovery-v2",
+    "confidence_score_at_decision": 0.84,
+    "routing_tier": "L2",
+    "human_action": "approved",
+    "resolution_outcome": "success",
+    "actual_mttr": 420,
+})
+assert rec_id is not None and len(rec_id) == 36
+ok("decision_history: write_record returns valid UUID")
+
+# Read back via pattern query
+records = get_records_for_pattern(
+    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
+    "java-spring-boot", "connection-pool-recovery-v2",
+)
+assert any(r["record_id"] == rec_id for r in records)
+ok("decision_history: get_records_for_pattern returns written record")
+
+# client_id isolation: different client sees no records
+other_records = get_records_for_pattern(
+    "RETAILMAX_EU_002", "CONNECTION_POOL_EXHAUSTED",
+    "java-spring-boot", "connection-pool-recovery-v2",
+)
+assert not any(r["record_id"] == rec_id for r in other_records)
+ok("decision_history: client_id isolation — other client cannot see records")
+
+# Accuracy rate: 1 success = 1.0
+rate, count = dh_accuracy(
+    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
+    "java-spring-boot", "connection-pool-recovery-v2",
+)
+assert count >= 1
+assert rate == 1.0
+ok("decision_history: 1 success record → accuracy_rate=1.0")
+
+# mark_recurrence retroactively marks resolution as failed
+mark_recurrence("INC-DH-001", "FINCORE_UK_001")
+rate_after, _ = dh_accuracy(
+    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
+    "java-spring-boot", "connection-pool-recovery-v2",
+)
+assert rate_after == 0.0, f"After recurrence mark, rate should be 0.0, got {rate_after}"
+ok("decision_history: mark_recurrence → accuracy drops to 0.0")
+
+# Incident count
+count_fc = get_incident_count_for_client("FINCORE_UK_001")
+assert count_fc >= 1
+ok("decision_history: get_incident_count_for_client returns >= 1")
+
+# client_id required
+try:
+    write_record({
+        "client_id": "", "incident_id": "x", "anomaly_type": "x",
+        "service_class": "x", "recommended_action_id": "x",
+        "confidence_score_at_decision": 0.5, "routing_tier": "L1",
+        "human_action": "approved", "resolution_outcome": "success", "actual_mttr": 0,
+    })
+    fail("decision_history: empty client_id should raise ValueError")
+except ValueError:
+    ok("decision_history: empty client_id raises ValueError")
+
+# Invalid routing_tier rejected
+try:
+    write_record({
+        "client_id": "FINCORE_UK_001", "incident_id": "x", "anomaly_type": "x",
+        "service_class": "x", "recommended_action_id": "x",
+        "confidence_score_at_decision": 0.5, "routing_tier": "INVALID",
+        "human_action": "approved", "resolution_outcome": "success", "actual_mttr": 0,
+    })
+    fail("decision_history: invalid routing_tier should raise ValueError")
+except ValueError:
+    ok("decision_history: invalid routing_tier raises ValueError")
+
+# Immutability: no update/delete methods
+import backend.learning.decision_history as _dh_mod
+assert not hasattr(_dh_mod, "update_record"), "update_record must not exist"
+assert not hasattr(_dh_mod, "delete_record"), "delete_record must not exist"
+ok("decision_history: immutable — no update/delete methods")
+
+print("\n── Phase 4: recalibration.py ──")
+from backend.learning.recalibration import (
+    get_cached_accuracy, recalibrate_after_resolution,
+    force_recalculate_all, get_cache_snapshot,
+)
+
+# Cold cache → neutral prior
+rate_cold, count_cold = get_cached_accuracy(
+    "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
+    "java-spring-boot", "connection-pool-recovery-v2",
+)
+assert rate_cold == 0.50
+assert count_cold == 0
+ok("recalibration: cold cache → (0.50, 0) neutral prior")
+
+# After recalibration, cache reflects decision_history
+async def test_recalibration():
+    await recalibrate_after_resolution(
+        client_id="FINCORE_UK_001",
+        incident_id="INC-DH-001",
+        anomaly_type="CONNECTION_POOL_EXHAUSTED",
+        service_class="java-spring-boot",
+        action_id="connection-pool-recovery-v2",
+    )
+    rate_warm, count_warm = get_cached_accuracy(
+        "FINCORE_UK_001", "CONNECTION_POOL_EXHAUSTED",
+        "java-spring-boot", "connection-pool-recovery-v2",
+    )
+    assert count_warm >= 1
+    assert 0.0 <= rate_warm <= 1.0
+    ok(f"recalibration: after recalibrate, cache updated — rate={rate_warm:.2f}, count={count_warm}")
+
+    # force_recalculate_all rebuilds cache
+    results = await force_recalculate_all(["FINCORE_UK_001"])
+    assert "FINCORE_UK_001" in results
+    assert results["FINCORE_UK_001"] >= 0
+    ok("recalibration: force_recalculate_all completes without error")
+
+    # get_cache_snapshot returns serialisable dict
+    snapshot = get_cache_snapshot()
+    assert isinstance(snapshot, dict)
+    ok("recalibration: get_cache_snapshot returns dict")
+
+asyncio.run(test_recalibration())
+
+print("\n── Phase 4: weight_correction.py ──")
+from backend.learning.weight_correction import (
+    initialise_db as wc_init, record_modification_diff,
+    record_rejection, get_adjusted_default, get_hypothesis_weights,
+)
+
+wc_init()
+
+# No adjustment yet → get_adjusted_default returns None
+result_none = get_adjusted_default("FINCORE_UK_001", "connection-pool-recovery-v2", "target_pool_size")
+assert result_none is None
+ok("weight_correction: no diffs yet → get_adjusted_default returns None")
+
+# Record 3 same-direction diffs → adjusted default computed
+playbook_defaults = {"target_pool_size": 150.0}
+for i in range(3):
+    record_modification_diff(
+        client_id="FINCORE_UK_001",
+        incident_id=f"INC-WC-00{i}",
+        action_id="connection-pool-recovery-v2",
+        modification_diff={"target_pool_size": 200.0},
+        playbook_defaults=playbook_defaults,
+    )
+adjusted = get_adjusted_default("FINCORE_UK_001", "connection-pool-recovery-v2", "target_pool_size")
+assert adjusted is not None
+assert adjusted <= 150.0 * 1.5, f"Adjusted value {adjusted} exceeds +50% ceiling"
+assert adjusted >= 150.0 * 0.5, f"Adjusted value {adjusted} below -50% floor"
+ok(f"weight_correction: 3 same-direction diffs → adjusted_default={adjusted:.1f} (within ±50%)")
+
+# Rejection → hypothesis weight updated
+record_rejection(
+    client_id="FINCORE_UK_001",
+    incident_id="INC-WC-REJ-001",
+    action_id="connection-pool-recovery-v2",
+    rejection_reason="The connection pool hypothesis is wrong, this is a memory issue",
+)
+weights = get_hypothesis_weights("FINCORE_UK_001")
+assert "connection_pool_exhaustion" in weights or "memory_exhaustion" in weights
+ok("weight_correction: rejection with parseable reason → hypothesis weight updated")
+
+# Unparseable rejection → no crash, no weight update
+initial_weights = get_hypothesis_weights("FINCORE_UK_001")
+record_rejection(
+    client_id="FINCORE_UK_001",
+    incident_id="INC-WC-REJ-002",
+    action_id="connection-pool-recovery-v2",
+    rejection_reason="xyz abc 123 completely unparseable gibberish",
+)
+ok("weight_correction: unparseable rejection → no crash")
+
+# client_id required
+try:
+    get_adjusted_default("", "connection-pool-recovery-v2", "target_pool_size")
+    fail("weight_correction: empty client_id should raise ValueError")
+except ValueError:
+    ok("weight_correction: empty client_id raises ValueError")
+
+print("\n── Phase 4: trust_progression.py ──")
+from backend.learning.trust_progression import (
+    evaluate_progression, confirm_upgrade, get_progression_metrics,
+)
+
+# get_progression_metrics returns expected structure
+async def test_trust():
+    metrics = get_progression_metrics("FINCORE_UK_001")
+    assert "current_stage" in metrics
+    assert "total_incidents" in metrics
+    assert "overall_accuracy" in metrics
+    assert "auto_resolution_rate" in metrics
+    assert "stage_1_criteria_met" in metrics
+    assert "stage_2_criteria_met" in metrics
+    assert "incidents_to_next_stage" in metrics
+    ok("trust_progression: get_progression_metrics returns all expected keys")
+
+    # evaluate_progression returns dict with required keys
+    result = await evaluate_progression("FINCORE_UK_001", "INC-TRUST-001")
+    assert "current_stage" in result
+    assert "criteria_met" in result
+    assert "recommendation" in result
+    ok("trust_progression: evaluate_progression returns dict with required keys")
+
+    # confirm_upgrade requires SDM confirmation
+    try:
+        confirm_upgrade("FINCORE_UK_001", 2, "")
+        fail("trust_progression: empty sdm_confirmed_by should raise ValueError")
+    except ValueError:
+        ok("trust_progression: empty sdm_confirmed_by raises ValueError")
+
+    # confirm_upgrade rejects non-sequential stage jump
+    try:
+        confirm_upgrade("FINCORE_UK_001", 5, "SDM_JOHN")
+        fail("trust_progression: non-sequential stage jump should raise ValueError")
+    except ValueError:
+        ok("trust_progression: non-sequential stage jump raises ValueError")
+
+    # client_id required
+    try:
+        get_progression_metrics("")
+        fail("trust_progression: empty client_id should raise ValueError")
+    except ValueError:
+        ok("trust_progression: empty client_id raises ValueError")
+
+asyncio.run(test_trust())
 
 # ── Final results ──────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
