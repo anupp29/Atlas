@@ -30,6 +30,7 @@ Before writing any file: re-read the STRUCTURE.md section for that file. Identif
 ## HARD RULES — NON-NEGOTIABLE
 
 - Write code only when explicitly told to.
+- When a phase is complete, stop coding immediately. Do not begin the next phase or any adjacent files until the user explicitly instructs you to continue. Announce phase completion with a single line and wait.
 - Build the exact file specified to completion. No adjacent files unless they are direct imports required for the current file to function.
 - No placeholders. No TODO comments. No stub functions that return None silently.
 - Never write `pass` unless it is an abstract method stub with a docstring. Never write `# TODO`, `# FIXME`, `# placeholder`. Either implement it or raise `NotImplementedError` with a precise message.

@@ -364,7 +364,7 @@ class BaseAgent(ABC):
             baseline_stddev=round(float(baseline_stddev), 4),
             current_value=round(float(current_value), 4),
             deviation_sigma=round(float(deviation_sigma), 4),
-            supporting_log_samples=log_samples[-_REQUIRED_LOG_SAMPLES:] if not critical_mode else log_samples[-_REQUIRED_LOG_SAMPLES:] or log_samples,
+            supporting_log_samples=log_samples[-_REQUIRED_LOG_SAMPLES:] if not critical_mode else (log_samples[-_REQUIRED_LOG_SAMPLES:] if len(log_samples) >= _REQUIRED_LOG_SAMPLES else log_samples),
             preliminary_hypothesis=preliminary_hypothesis,
             severity_classification=severity_classification,
             detection_timestamp=datetime.now(timezone.utc),

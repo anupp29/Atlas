@@ -103,6 +103,7 @@ class EventQueue:
 
         age_seconds = (datetime.now(timezone.utc) - enqueue_time).total_seconds()
         if age_seconds > _STALE_THRESHOLD_SECONDS:
+            # Return a copy with stale flag — never mutate the original event
             event = {**event, "stale": True, "queue_age_seconds": round(age_seconds, 1)}
             logger.warning(
                 "event_queue.stale_event",
@@ -125,6 +126,7 @@ class EventQueue:
             event, enqueue_time = queue.get_nowait()
             age_seconds = (datetime.now(timezone.utc) - enqueue_time).total_seconds()
             if age_seconds > _STALE_THRESHOLD_SECONDS:
+                # Return a copy with stale flag — never mutate the original event
                 event = {**event, "stale": True, "queue_age_seconds": round(age_seconds, 1)}
             return event
         except asyncio.QueueEmpty:

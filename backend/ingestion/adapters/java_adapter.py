@@ -84,7 +84,7 @@ def parse_line(
             "client_id": client_id,
             "source_system": service_name,
             "source_type": "java-unparseable",
-            "severity": "INFO",
+            "severity": "UNKNOWN",
             "error_code": "",
             "message": raw_line,
             "raw_payload": raw_line,

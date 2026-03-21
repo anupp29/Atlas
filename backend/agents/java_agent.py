@@ -21,6 +21,9 @@ from backend.agents.detection.isolation_forest import IsolationForestDetector
 
 logger = structlog.get_logger(__name__)
 
+# Detection threshold — must match base_agent._ALERT_SIGMA
+_ALERT_SIGMA = 3.0
+
 # ATLAS error taxonomy mappings for Java
 _CRITICAL_PATTERNS: dict[str, tuple[str, str, str]] = {
     # pattern_key: (regex, anomaly_type, hypothesis)

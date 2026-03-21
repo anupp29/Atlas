@@ -63,7 +63,7 @@ class CmdbEnricher:
 
         if not client_id:
             logger.error("cmdb_enricher.missing_client_id", event_id=event.get("atlas_event_id"))
-            return {**event, "cmdb_enrichment_status": "error_missing_client_id"}
+            return {**event, "cmdb_enrichment_status": "not_found"}
 
         # Validate client_id matches event — critical multi-tenancy check
         if event.get("client_id") != client_id:
@@ -72,7 +72,7 @@ class CmdbEnricher:
                 event_client=event.get("client_id"),
                 enricher_client=client_id,
             )
-            return {**event, "cmdb_enrichment_status": "error_client_id_mismatch"}
+            return {**event, "cmdb_enrichment_status": "not_found"}
 
         cache_key = (client_id, service_name)
         now = time.monotonic()
