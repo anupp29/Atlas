@@ -1,0 +1,64 @@
+client_id: RETAILMAX_EU_002
+client_name: RetailMax EU
+region: EU
+auto_execute_threshold: 0.82
+max_action_class: 1
+compliance_frameworks:
+  - GDPR
+business_hours:
+  start_hour: 8
+  end_hour: 20
+  weekdays_only: true
+  timezone: Europe/Amsterdam
+change_freeze_windows: []
+sla_breach_thresholds:
+  P1: 15
+  P2: 60
+  P3: 240
+  P4: 960
+escalation_matrix:
+  L1:
+    contact: l1-desk@atos.com
+    channel: slack
+    slack_channel: "#atlas-l1-retailmax"
+  L2:
+    contact: l2-tech@atos.com
+    channel: slack
+    slack_channel: "#atlas-l2-retailmax"
+  L3:
+    contact: l3-architect@atos.com
+    channel: slack
+    slack_channel: "#atlas-l3-retailmax"
+  SDM:
+    contact: sdm-retailmax@atos.com
+    channel: slack
+    slack_channel: "#atlas-sdm-retailmax"
+trust_level: 2
+applications:
+  - name: ProductAPI
+    tech_type: nodejs
+    version: "18.17.0"
+    criticality: P2
+    compliance_sensitive: false
+  - name: CartService
+    tech_type: nodejs
+    version: "18.17.0"
+    criticality: P2
+    compliance_sensitive: false
+  - name: RedisCache
+    tech_type: redis
+    version: "7.0.12"
+    criticality: P2
+    compliance_sensitive: false
+    redis_host: localhost
+    redis_port: 6379
+  - name: MongoDB
+    tech_type: mongodb
+    version: "6.0.8"
+    criticality: P2
+    compliance_sensitive: true
+  - name: CDN
+    tech_type: cloudflare
+    version: "latest"
+    criticality: P3
+    compliance_sensitive: false

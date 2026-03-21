@@ -1,0 +1,67 @@
+client_id: FINCORE_UK_001
+client_name: FinanceCore Ltd
+region: UK
+auto_execute_threshold: 0.92
+max_action_class: 1
+compliance_frameworks:
+  - PCI-DSS
+  - SOX
+  - ISO-27001
+business_hours:
+  start_hour: 8
+  end_hour: 18
+  weekdays_only: true
+  timezone: Europe/London
+change_freeze_windows: []
+sla_breach_thresholds:
+  P1: 15
+  P2: 30
+  P3: 120
+  P4: 480
+escalation_matrix:
+  L1:
+    contact: l1-desk@atos.com
+    channel: slack
+    slack_channel: "#atlas-l1-financecore"
+  L2:
+    contact: l2-tech@atos.com
+    channel: slack
+    slack_channel: "#atlas-l2-financecore"
+  L3:
+    contact: l3-architect@atos.com
+    channel: slack
+    slack_channel: "#atlas-l3-financecore"
+  SDM:
+    contact: sdm-financecore@atos.com
+    channel: slack
+    slack_channel: "#atlas-sdm-financecore"
+trust_level: 1
+applications:
+  - name: PaymentAPI
+    tech_type: java-spring-boot
+    version: "3.1.2"
+    criticality: P1
+    compliance_sensitive: true
+    health_endpoint: http://payment-api:8080/actuator/health
+    config_endpoint: http://payment-api:8080/actuator/env
+  - name: TransactionDB
+    tech_type: postgresql
+    version: "14.8"
+    criticality: P1
+    compliance_sensitive: true
+    max_connections: 100
+  - name: AuthService
+    tech_type: java-spring-boot
+    version: "2.7.14"
+    criticality: P2
+    compliance_sensitive: true
+  - name: NotificationService
+    tech_type: java-spring-boot
+    version: "2.7.14"
+    criticality: P3
+    compliance_sensitive: false
+  - name: APIGateway
+    tech_type: kong
+    version: "3.4.0"
+    criticality: P2
+    compliance_sensitive: false
