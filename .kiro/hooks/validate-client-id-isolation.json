@@ -1,0 +1,13 @@
+{
+  "name": "Validate client_id Isolation",
+  "version": "1.0.0",
+  "description": "After writing any Python backend file, check for multi-tenancy violations",
+  "when": {
+    "type": "postToolUse",
+    "toolTypes": ["write"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review the file just written for multi-tenancy violations. Check: (1) Every Neo4j Cypher query has a client_id WHERE clause. (2) Every database write includes client_id. (3) No cache key is missing client_id as a component. (4) No code path can serve data from one client to another. (5) ChromaDB searches use the client-namespaced collection. If any violation is found, fix it immediately before continuing."
+  }
+}

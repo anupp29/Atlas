@@ -1,0 +1,12 @@
+{
+  "name": "Prompt test_progress.py Update",
+  "version": "1.0.0",
+  "description": "After a task is completed, remind the agent to update test_progress.py with the minimum assertion for the file just built",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A task just completed. If a new production file was built, update test_progress.py with the minimum assertion that confirms the file works — one fast check, under 5 seconds total runtime. Do not add multiple assertions. Do not turn it into a test suite. One assertion per file built."
+  }
+}
