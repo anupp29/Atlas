@@ -124,9 +124,9 @@ class JavaAgent(BaseAgent):
         self.record_event_received()
         self._last_event_per_service[service_name] = datetime.now(timezone.utc)
 
-        message: str = event.get("message", "")
-        severity: str = event.get("severity", "INFO")
-        raw_payload: str = event.get("raw_payload", message)
+        message: str = event.get("message") or ""
+        severity: str = event.get("severity") or "INFO"
+        raw_payload: str = event.get("raw_payload") or message
 
         # Add to log buffer
         self._add_log_sample(service_name, raw_payload)

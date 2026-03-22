@@ -100,6 +100,21 @@ async def run(state: AtlasState) -> dict[str, Any]:
         }
 
     # ── Human review paths — send briefing and interrupt ─────────────────────
+    # If human_action is already set, this is a resume after approval — skip interrupt.
+    human_action = state.get("human_action", "")
+    if human_action in ("approved", "modified", "rejected", "escalated"):
+        logger.info(
+            "n7_router.resuming_after_human_decision",
+            client_id=client_id,
+            incident_id=incident_id,
+            human_action=human_action,
+        )
+        audit_entry["destination"] = f"human_review_{_determine_tier(routing, priority)}"
+        audit_entry["human_action"] = human_action
+        return {
+            "audit_trail": append_audit_entry(state, audit_entry),
+        }
+
     tier = _determine_tier(routing, priority)
     await _notify_channel(
         client_id=client_id,
@@ -111,9 +126,7 @@ async def run(state: AtlasState) -> dict[str, Any]:
     )
 
     audit_entry["destination"] = f"human_review_{tier}"
-    audit_entry["sla_breach_time"] = state.get("sla_breach_time", "").isoformat() if isinstance(
-        state.get("sla_breach_time"), datetime
-    ) else str(state.get("sla_breach_time", ""))
+    audit_entry["sla_breach_time"] = str(state.get("sla_breach_time", ""))
 
     logger.info(
         "n7_router.suspending_for_human_review",
@@ -182,8 +195,9 @@ async def _notify_channel(
         )
         return
 
+    # YAML escalation_matrix keys are uppercase (L1, L2, L3, SDM)
     escalation_matrix: dict = client_config.get("escalation_matrix", {})
-    tier_config: dict = escalation_matrix.get(tier, {})
+    tier_config: dict = escalation_matrix.get(tier.upper(), {})
     contact = tier_config.get("contact", tier.upper())
 
     composite = state.get("composite_confidence_score", 0.0)
@@ -198,7 +212,7 @@ async def _notify_channel(
     playbook_name = playbook.name if playbook else action_id or "Unknown"
     action_class = playbook.action_class if playbook else "?"
 
-    sla_str = sla_breach.isoformat() if isinstance(sla_breach, datetime) else str(sla_breach or "")
+    sla_str = str(sla_breach or "")
 
     veto_text = "\n".join(f"• {v}" for v in vetoes) if vetoes else "None"
 

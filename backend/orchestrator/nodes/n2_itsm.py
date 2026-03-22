@@ -224,8 +224,9 @@ def _build_payload(
     affected_ci = evidence_packages[0].get("service_name", "") if evidence_packages else ""
 
     # Assignment group from escalation matrix
+    # YAML keys are uppercase (L1, L2, L3, SDM) — must match exactly
     escalation_matrix: dict = client_config.get("escalation_matrix", {})
-    tier_key = "l1" if priority in ("P3", "P4") else "l2"
+    tier_key = "L1" if priority in ("P3", "P4") else "L2"
     assignment_group = escalation_matrix.get(tier_key, {}).get("group", "IT Operations")
 
     # Short description: max 160 chars for ServiceNow

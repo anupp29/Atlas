@@ -18,6 +18,10 @@ def check_change_freeze_window(
     """
     Veto 1: Fire if current time falls within a configured change freeze window.
 
+    Supports two window formats:
+    1. Absolute range: {"start": "2026-12-24T00:00:00", "end": "2027-01-02T23:59:59"}
+    2. Recurring daily: {"start": "09:00", "end": "17:00", "weekdays_only": true, "recurring_daily": true}
+
     Args:
         client_config: Client configuration dict with 'change_freeze_windows' list.
         current_time: Current UTC datetime.
@@ -30,18 +34,59 @@ def check_change_freeze_window(
         current_time = current_time.replace(tzinfo=timezone.utc)
 
     for window in freeze_windows:
-        start = window.get("start")
-        end = window.get("end")
-        if start and end:
-            if isinstance(start, str):
-                start = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
-            if isinstance(end, str):
-                end = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
-            if start <= current_time <= end:
+        start_raw = window.get("start")
+        end_raw = window.get("end")
+        if not start_raw or not end_raw:
+            continue
+
+        # Recurring daily window (time-only strings like "09:00")
+        if window.get("recurring_daily"):
+            try:
+                start_time = datetime.strptime(str(start_raw), "%H:%M").time()
+                end_time = datetime.strptime(str(end_raw), "%H:%M").time()
+            except ValueError:
+                continue
+            weekdays_only = window.get("weekdays_only", False)
+            if weekdays_only and current_time.weekday() >= 5:
+                # Weekend — window does not apply
+                continue
+            current_tod = current_time.time().replace(tzinfo=None)
+            if start_time <= current_tod <= end_time:
+                label = window.get("label", "recurring daily freeze window")
                 return (
-                    f"Change freeze window is active until {end.isoformat()}. "
+                    f"Change freeze window active ({label}: {start_raw}–{end_raw}). "
                     "No automated actions are permitted during this period."
                 )
+            continue
+
+        # Absolute datetime range
+        if isinstance(start_raw, str):
+            try:
+                start = datetime.fromisoformat(start_raw)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        else:
+            start = start_raw
+
+        if isinstance(end_raw, str):
+            try:
+                end = datetime.fromisoformat(end_raw)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        else:
+            end = end_raw
+
+        if start <= current_time <= end:
+            label = window.get("label", "")
+            label_str = f" ({label})" if label else ""
+            return (
+                f"Change freeze window{label_str} is active until {end.isoformat()}. "
+                "No automated actions are permitted during this period."
+            )
     return None
 
 

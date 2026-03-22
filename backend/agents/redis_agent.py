@@ -114,8 +114,8 @@ class RedisAgent(BaseAgent):
         self._ensure_detectors(service_name)
         self.record_event_received()
 
-        message: str = event.get("message", "")
-        raw_payload: str = event.get("raw_payload", message)
+        message: str = event.get("message") or ""
+        raw_payload: str = event.get("raw_payload") or message
 
         self._add_log_sample(service_name, raw_payload)
 

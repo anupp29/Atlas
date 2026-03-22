@@ -132,6 +132,28 @@ assert check_change_freeze_window(freeze_config, inside_freeze) is not None
 assert check_change_freeze_window(freeze_config, outside_freeze) is None
 ok("veto_change_freeze: inside window→fires, outside→silent")
 
+# Change freeze window veto — recurring daily format (financecore.yaml trading hours)
+recurring_freeze_config = {
+    "change_freeze_windows": [
+        {
+            "recurring_daily": True,
+            "start": "09:00",
+            "end": "17:00",
+            "weekdays_only": True,
+        }
+    ]
+}
+# Monday 10:00 UTC — inside recurring trading hours window
+monday_10am_freeze = datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc)  # Monday
+assert check_change_freeze_window(recurring_freeze_config, monday_10am_freeze) is not None
+# Monday 08:00 UTC — before window opens
+monday_8am = datetime(2026, 3, 23, 8, 0, tzinfo=timezone.utc)
+assert check_change_freeze_window(recurring_freeze_config, monday_8am) is None
+# Saturday 10:00 UTC — weekdays_only=True, so no freeze on weekend
+saturday_10am = datetime(2026, 3, 21, 10, 0, tzinfo=timezone.utc)
+assert check_change_freeze_window(recurring_freeze_config, saturday_10am) is None
+ok("veto_change_freeze: recurring_daily window fires on weekday in-hours, silent outside")
+
 # Compliance data touched veto
 gdpr_config = {
     "compliance_frameworks": ["GDPR"],

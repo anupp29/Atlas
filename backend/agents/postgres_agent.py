@@ -115,9 +115,9 @@ class PostgresAgent(BaseAgent):
         self._ensure_detectors(service_name)
         self.record_event_received()
 
-        message: str = event.get("message", "")
-        severity: str = event.get("severity", "INFO")
-        raw_payload: str = event.get("raw_payload", message)
+        message: str = event.get("message") or ""
+        severity: str = event.get("severity") or "INFO"
+        raw_payload: str = event.get("raw_payload") or message
 
         # Extract max_connections from CMDB enrichment if available
         cmdb_max_conn = event.get("max_connections")
@@ -125,7 +125,7 @@ class PostgresAgent(BaseAgent):
             self._max_connections[service_name] = cmdb_max_conn
 
         # Detect replica from CMDB
-        ci_class = event.get("ci_class", "")
+        ci_class = event.get("ci_class") or ""
         if _REPLICATION_RE.search(ci_class):
             self._is_replica[service_name] = True
 

@@ -145,3 +145,23 @@ class EventQueue:
     def get_all_client_ids(self) -> list[str]:
         """Return all client IDs that have active queues."""
         return list(self._queues.keys())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module-level singleton — all callers share the same in-memory queues.
+# Import this instead of constructing EventQueue() directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_singleton: EventQueue | None = None
+
+
+def get_event_queue() -> EventQueue:
+    """
+    Return the process-wide EventQueue singleton.
+    All callers (monitoring loop, ingest endpoint, tests) share the same instance
+    so that events enqueued via the HTTP endpoint are visible to the monitoring loop.
+    """
+    global _singleton
+    if _singleton is None:
+        _singleton = EventQueue()
+    return _singleton

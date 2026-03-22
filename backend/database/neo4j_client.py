@@ -23,6 +23,32 @@ _CACHE: dict[str, tuple[list[dict], float]] = {}
 _CACHE_TTL_SECONDS = 60
 _CACHE_LOCK = asyncio.Lock()
 
+
+def _sanitize_neo4j_record(record: dict) -> dict:
+    """
+    Recursively convert Neo4j-specific types to JSON/msgpack-safe Python types.
+    Neo4j DateTime → ISO-8601 string. Neo4j Date → ISO string. Lists/dicts recurse.
+    """
+    result: dict = {}
+    for k, v in record.items():
+        result[k] = _sanitize_value(v)
+    return result
+
+
+def _sanitize_value(v: Any) -> Any:
+    """Convert a single Neo4j value to a JSON-safe Python type."""
+    # Neo4j temporal types — check by class name to avoid hard import dependency
+    type_name = type(v).__name__
+    if type_name in ("DateTime", "Date", "Time", "LocalDateTime", "LocalTime"):
+        return v.iso_format() if hasattr(v, "iso_format") else str(v)
+    if type_name == "Duration":
+        return str(v)
+    if isinstance(v, dict):
+        return {kk: _sanitize_value(vv) for kk, vv in v.items()}
+    if isinstance(v, list):
+        return [_sanitize_value(item) for item in v]
+    return v
+
 # Modules permitted to execute write transactions
 _ALLOWED_WRITERS = frozenset({
     "backend.database.neo4j_client",   # seed operations
@@ -122,7 +148,7 @@ class Neo4jClient:
                 async with self._driver.session() as session:
                     result = await session.run(cypher, params)
                     records = await result.data()
-                    rows = [dict(r) for r in records]
+                    rows = [_sanitize_neo4j_record(dict(r)) for r in records]
 
                 if use_cache:
                     async with _CACHE_LOCK:
@@ -215,5 +241,6 @@ class Neo4jClient:
 
     @staticmethod
     def _cache_key(cypher: str, params: dict, client_id: str) -> str:
-        payload = json.dumps({"cypher": cypher, "params": params, "client_id": client_id}, sort_keys=True)
+        safe_params = _sanitize_neo4j_record(params)
+        payload = json.dumps({"cypher": cypher, "params": safe_params, "client_id": client_id}, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()

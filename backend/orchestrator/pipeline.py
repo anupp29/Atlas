@@ -260,6 +260,31 @@ async def _execute_playbook_node(state: AtlasState) -> dict[str, Any]:
             }),
         }
 
+    # HARD BLOCK: Class 3 actions never auto-execute at any trust level.
+    # This is a permanent ceiling — non-configurable. Checked before any other flag.
+    if playbook_meta.action_class == 3:
+        logger.error(
+            "pipeline.class3_execution_blocked",
+            action_id=action_id,
+            client_id=client_id,
+            incident_id=incident_id,
+        )
+        return {
+            "execution_status": "blocked",
+            "execution_result": {
+                "error": f"Playbook '{action_id}' is Class 3 — permanent auto-execute ceiling. "
+                         "Class 3 actions require manual execution only."
+            },
+            "routing_decision": "L2_L3_ESCALATION",
+            "audit_trail": append_audit_entry(state, {
+                "node": "execute_playbook",
+                "actor": "ATLAS_AUTO",
+                "action": "class3_execution_blocked",
+                "action_id": action_id,
+                "reason": "Class 3 permanent ceiling — non-configurable",
+            }),
+        }
+
     # Check auto_execute_eligible flag
     if not playbook_meta.auto_execute_eligible and state.get("routing_decision") == "AUTO_EXECUTE":
         logger.error(
@@ -387,7 +412,11 @@ async def _learning_node(state: AtlasState) -> dict[str, Any]:
     client_id = state["client_id"]
     incident_id = state["incident_id"]
 
-    mttr_start: datetime = state.get("mttr_start_time") or datetime.now(timezone.utc)
+    mttr_start_str: str = state.get("mttr_start_time") or datetime.now(timezone.utc).isoformat()
+    try:
+        mttr_start = datetime.fromisoformat(mttr_start_str)
+    except (ValueError, TypeError):
+        mttr_start = datetime.now(timezone.utc)
     mttr_seconds = int((datetime.now(timezone.utc) - mttr_start).total_seconds())
 
     resolution_outcome = state.get("resolution_outcome", "failure")
@@ -401,11 +430,24 @@ async def _learning_node(state: AtlasState) -> dict[str, Any]:
     evidence_packages = state["evidence_packages"]
     primary_pkg = max(evidence_packages, key=lambda p: p.get("detection_confidence", 0.0), default={})
 
+    # DECISION: service_class is the technology class (e.g. "java-spring-boot"), not the
+    # service name. Map agent_id → tech type per the ATLAS error taxonomy and agent naming.
+    _AGENT_TO_TECH: dict[str, str] = {
+        "java-agent":     "java-spring-boot",
+        "postgres-agent": "postgresql",
+        "nodejs-agent":   "nodejs",
+        "redis-agent":    "redis",
+    }
+    service_class = _AGENT_TO_TECH.get(
+        primary_pkg.get("agent_id", ""),
+        primary_pkg.get("agent_id", "unknown"),
+    )
+
     record = {
         "client_id": client_id,
         "incident_id": incident_id,
         "anomaly_type": primary_pkg.get("anomaly_type", ""),
-        "service_class": primary_pkg.get("service_name", ""),
+        "service_class": service_class,
         "recommended_action_id": state.get("recommended_action_id", ""),
         "confidence_score_at_decision": state.get("composite_confidence_score", 0.0),
         "routing_tier": routing_tier,
@@ -440,7 +482,7 @@ async def _learning_node(state: AtlasState) -> dict[str, Any]:
     asyncio.create_task(_check_trust_progression(client_id, incident_id))
 
     from datetime import timedelta
-    recurrence_due = datetime.now(timezone.utc) + timedelta(hours=48)
+    recurrence_due = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
 
     return {
         "mttr_seconds": mttr_seconds,

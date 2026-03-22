@@ -27,9 +27,17 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import structlog
+
+# Load .env before any env-var reads — must happen before module-level code
+# that reads os.environ (e.g. structlog config, client registry).
+_env_path = Path(__file__).parent.parent / ".env"
+if _env_path.exists():
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=_env_path, override=False)
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -60,6 +68,10 @@ _REQUIRED_ENV_VARS: list[str] = [
     "ATLAS_DECISION_DB_PATH",
     "ATLAS_CHECKPOINT_DB_PATH",
 ]
+
+# Optional — defaults are used if not set. Ollama is the primary LLM path.
+_OLLAMA_BASE_URL_DEFAULT = "http://localhost:11434"
+_OLLAMA_MODEL_DEFAULT = "qwen3-coder:480b-cloud"
 
 
 def _validate_env_vars() -> None:
@@ -679,12 +691,12 @@ async def _agent_monitoring_loop(client_id: str) -> None:
     """
     from backend.agents.correlation_engine import CorrelationEngine
     from backend.database.neo4j_client import Neo4jClient
-    from backend.ingestion.event_queue import EventQueue
+    from backend.ingestion.event_queue import get_event_queue
 
     logger.info("monitoring.started", client_id=client_id)
     neo4j = Neo4jClient()
     correlation_engine = CorrelationEngine(neo4j)
-    event_queue = EventQueue()
+    event_queue = get_event_queue()
 
     while True:
         try:
@@ -787,8 +799,16 @@ async def _route_event_to_agent(
     # Feed evidence package to correlation engine
     result: CorrelatedIncident | None = await correlation_engine.ingest_evidence(pkg)
     if result is not None:
+        def _pkg_to_dict(p: Any) -> dict:
+            d = vars(p) if hasattr(p, "__dict__") else dict(p)
+            # Convert datetime fields to ISO strings for msgpack serialization
+            for k, v in d.items():
+                if isinstance(v, datetime):
+                    d[k] = v.isoformat()
+            return d
+
         return {
-            "evidence_packages": [vars(p) if hasattr(p, "__dict__") else p for p in result.evidence_packages],
+            "evidence_packages": [_pkg_to_dict(p) for p in result.evidence_packages],
             "correlation_type": result.correlation_type,
             "early_warning_signals": result.early_warning_signals,
         }
@@ -947,7 +967,36 @@ async def internal_llm_reason(request: LLMReasonRequest) -> dict[str, Any]:
         incident_id=request.incident_context.get("incident_id", ""),
     )
 
-    # ── Attempt Claude call ───────────────────────────────────────────────────
+    # ── Attempt Ollama call (primary — qwen3-coder:480b-cloud) ──────────────────
+    ollama_base = os.environ.get("OLLAMA_BASE_URL", _OLLAMA_BASE_URL_DEFAULT)
+    ollama_model = os.environ.get("OLLAMA_MODEL", _OLLAMA_MODEL_DEFAULT)
+    try:
+        result = await _call_ollama(request, ollama_base, ollama_model, client_id)
+        if result:
+            action_id = result.get("recommended_action_id", "")
+            if action_id and not validate_action_id(action_id):
+                logger.warning(
+                    "llm_endpoint.invalid_action_id_from_ollama",
+                    action_id=action_id,
+                    client_id=client_id,
+                )
+                result["recommended_action_id"] = _infer_action_id(request)
+            logger.info(
+                "llm_endpoint.ollama_success",
+                client_id=client_id,
+                model=ollama_model,
+                action_id=result.get("recommended_action_id"),
+            )
+            return result
+    except Exception as exc:
+        logger.warning(
+            "llm_endpoint.ollama_failed",
+            client_id=client_id,
+            model=ollama_model,
+            error=str(exc),
+        )
+
+    # ── Attempt Claude call (secondary — only if key is set) ─────────────────
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if anthropic_key:
         try:
@@ -1001,6 +1050,121 @@ async def internal_llm_reason(request: LLMReasonRequest) -> dict[str, Any]:
         status_code=503,
         detail="LLM unavailable and no fallback found. Incident will be escalated to human review.",
     )
+
+
+async def _call_ollama(
+    request: LLMReasonRequest,
+    base_url: str,
+    model: str,
+    client_id: str,
+) -> dict[str, Any] | None:
+    """
+    Call local Ollama with qwen3-coder:480b-cloud using the /api/chat endpoint.
+    Returns structured JSON matching the ATLAS LLM response schema.
+    Timeout: 60 seconds (cloud-routed model, latency higher than local).
+    """
+    import json as _json
+    import httpx
+
+    prompt = _build_claude_prompt(request)  # same prompt works for any model
+
+    system_msg = (
+        "You are ATLAS, an AIOps reasoning engine. "
+        "You MUST respond with ONLY valid JSON matching the exact schema provided. "
+        "No markdown, no explanation, no code fences — raw JSON only."
+    )
+
+    schema_instruction = (
+        "\n\nRespond with ONLY this JSON structure (no other text):\n"
+        "{\n"
+        '  "root_cause": "string",\n'
+        '  "confidence_factors": {},\n'
+        '  "recommended_action_id": "connection-pool-recovery-v2 or redis-memory-policy-rollback-v1",\n'
+        '  "alternative_hypotheses": [\n'
+        '    {"hypothesis": "string", "evidence_for": "string", "evidence_against": "string", "confidence": 0.0}\n'
+        "  ],\n"
+        '  "explanation_for_engineer": "string (min 50 chars, L2 level)",\n'
+        '  "technical_evidence_summary": "string"\n'
+        "}"
+    )
+
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        resp = await http.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt + schema_instruction},
+                ],
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.1, "num_predict": 1024},
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.warning(
+            "llm_endpoint.ollama_bad_status",
+            status=resp.status_code,
+            body=resp.text[:300],
+            client_id=client_id,
+        )
+        return None
+
+    raw_content = resp.json().get("message", {}).get("content", "")
+    if not raw_content:
+        return None
+
+    # Strip any accidental markdown fences
+    raw_content = raw_content.strip()
+    if raw_content.startswith("```"):
+        raw_content = raw_content.split("```")[1]
+        if raw_content.startswith("json"):
+            raw_content = raw_content[4:]
+        raw_content = raw_content.strip()
+
+    try:
+        parsed = _json.loads(raw_content)
+    except _json.JSONDecodeError as exc:
+        logger.warning(
+            "llm_endpoint.ollama_invalid_json",
+            client_id=client_id,
+            error=str(exc),
+            raw_preview=raw_content[:200],
+        )
+        return None
+
+    # Validate required fields are present
+    required = {
+        "root_cause", "confidence_factors", "recommended_action_id",
+        "alternative_hypotheses", "explanation_for_engineer", "technical_evidence_summary",
+    }
+    missing = required - set(parsed.keys())
+    if missing:
+        logger.warning(
+            "llm_endpoint.ollama_missing_fields",
+            client_id=client_id,
+            missing=list(missing),
+        )
+        # Fill missing fields with safe defaults rather than failing
+        for field in missing:
+            if field == "confidence_factors":
+                parsed[field] = {}
+            elif field == "alternative_hypotheses":
+                parsed[field] = []
+            else:
+                parsed[field] = ""
+
+    # Validate explanation length
+    explanation = parsed.get("explanation_for_engineer", "")
+    if len(explanation) < 50:
+        parsed["explanation_for_engineer"] = (
+            f"{explanation} ATLAS detected an anomaly requiring investigation. "
+            "Please review the evidence and recommended action."
+        )
+
+    return parsed
 
 
 async def _call_claude(
@@ -1143,7 +1307,7 @@ async def ingest_log_line(payload: LogIngestPayload) -> dict[str, str]:
     # Route into the agent event queue for processing
     try:
         from backend.ingestion.normaliser import normalise
-        from backend.ingestion.event_queue import EventQueue
+        from backend.ingestion.event_queue import get_event_queue
 
         source_type = _infer_source_type(payload.source, payload.line)
         raw_event = {
@@ -1157,7 +1321,7 @@ async def ingest_log_line(payload: LogIngestPayload) -> dict[str, str]:
         }
         normalised = normalise(raw_event)
         if normalised:
-            eq = EventQueue()
+            eq = get_event_queue()
             await eq.enqueue(normalised, payload.client_id)
     except Exception as exc:
         logger.debug("log_ingest.queue_error", error=str(exc))

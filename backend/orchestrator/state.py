@@ -54,7 +54,7 @@ class AtlasState(TypedDict, total=False):
     correlation_type: str                   # "CASCADE_INCIDENT" | "ISOLATED_ANOMALY"
     incident_priority: str                  # "P1" | "P2" | "P3" | "P4"
     situation_summary: str                  # plain-English briefing for L1/L2
-    sla_breach_time: datetime               # absolute UTC datetime of SLA breach
+    sla_breach_time: str                    # ISO-8601 UTC string of SLA breach time
     criticality_uncertain: bool             # True if CMDB enrichment failed
 
     # ── ITSM (N2) ─────────────────────────────────────────────────────────────
@@ -98,12 +98,12 @@ class AtlasState(TypedDict, total=False):
     human_modified_parameters: dict        # parameter overrides from L2 Modify
 
     # ── MTTR tracking ─────────────────────────────────────────────────────────
-    mttr_start_time: datetime              # [IMMUTABLE] set in N1, never changed
+    mttr_start_time: str                   # [IMMUTABLE] ISO-8601 UTC, set in N1, never changed
     mttr_seconds: int                      # filled on resolution
 
     # ── Resolution ────────────────────────────────────────────────────────────
     resolution_outcome: str                # "success" | "failure" | "partial"
-    recurrence_check_due_at: datetime      # 48h after resolution
+    recurrence_check_due_at: str           # ISO-8601 UTC, 48h after resolution
 
     # ── Early warning ─────────────────────────────────────────────────────────
     early_warning_signals: list[dict]      # services between 1.5σ–2.5σ
@@ -215,20 +215,21 @@ def build_initial_state(
         raise ValueError("evidence_packages cannot be empty.")
 
     now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
 
     return AtlasState(
         # Immutable identity
         client_id=client_id,
         incident_id=incident_id,
         evidence_packages=evidence_packages,
-        mttr_start_time=now,
+        mttr_start_time=now_iso,
         thread_id="",  # injected by pipeline after run_incident
 
         # Classification defaults
         correlation_type=correlation_type,
         incident_priority="",
         situation_summary="",
-        sla_breach_time=now,
+        sla_breach_time=now_iso,
         criticality_uncertain=False,
 
         # ITSM defaults
@@ -276,7 +277,7 @@ def build_initial_state(
 
         # Resolution defaults
         resolution_outcome="",
-        recurrence_check_due_at=now,
+        recurrence_check_due_at=now_iso,
 
         # Early warning
         early_warning_signals=early_warning_signals or [],

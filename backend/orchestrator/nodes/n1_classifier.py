@@ -116,7 +116,7 @@ async def run(state: AtlasState) -> dict[str, Any]:
     updates: dict[str, Any] = {
         "incident_priority": priority,
         "situation_summary": situation_summary,
-        "sla_breach_time": sla_breach_time,
+        "sla_breach_time": sla_breach_time.isoformat(),
         "criticality_uncertain": criticality_uncertain,
         "audit_trail": append_audit_entry(state, {
             "node": "n1_classifier",
