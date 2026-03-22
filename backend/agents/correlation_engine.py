@@ -82,6 +82,9 @@ class CorrelationEngine:
         self._window_lock: dict[str, asyncio.Lock] = {}
         # Single lock to guard creation of per-client locks (prevents double-init race)
         self._lock_creation_lock = asyncio.Lock()
+        # Agent sigma cache: (client_id, service_name) → most recent sigma value
+        # Updated by agents via report_service_sigma() so early warning scan has real data
+        self._agent_sigma_cache: dict[tuple[str, str], float] = {}
 
     async def _get_lock(self, client_id: str) -> asyncio.Lock:
         """Return the per-client asyncio.Lock, creating it atomically if needed."""
@@ -140,6 +143,20 @@ class CorrelationEngine:
 
             # Multiple packages in window — check for cascade
             return await self._process_window(client_id, packages_in_window)
+
+    def report_service_sigma(self, client_id: str, service_name: str, sigma: float) -> None:
+        """
+        Called by specialist agents on every metric update to keep the sigma cache fresh.
+        The early warning scan uses this to populate real deviation values for adjacent services.
+
+        Args:
+            client_id:    Client scope — mandatory.
+            service_name: The service whose sigma is being reported.
+            sigma:        Current deviation in standard deviations from baseline.
+        """
+        if not client_id or not service_name:
+            return
+        self._agent_sigma_cache[(client_id, service_name)] = sigma
 
     async def flush_window(self, client_id: str) -> CorrelatedIncident | None:
         """
@@ -331,9 +348,12 @@ class CorrelationEngine:
         Scan blast-radius-adjacent services for early deviation (1.5σ–2.5σ).
         Runs after CASCADE classification — never delays the primary incident.
         Returns list of EarlyWarning signal dicts.
+
+        sigma values are populated from the agent baseline data held in this
+        engine's _agent_sigma_cache, which agents update via report_service_sigma().
+        Services with no cached sigma are returned with status 'monitoring' and
+        sigma=None — the frontend treats this as "watching, no data yet".
         """
-        # DECISION: Early warning scan queries the blast radius from Neo4j.
-        # If Neo4j is unavailable, return empty list — never block the primary incident.
         _BLAST_RADIUS_CYPHER = """
         MATCH (s:Service {client_id: $client_id})
         WHERE s.name IN $affected_services
@@ -353,22 +373,36 @@ class CorrelationEngine:
             if not results:
                 return []
 
-            # For MVP: return adjacent services as potential early warning candidates
-            # The actual sigma values come from the agent's baseline data
-            # This is a structural scan — agents provide the metric values
             early_warnings = []
             for row in results:
+                svc = row.get("service_name")
+                # Look up the most recent sigma reported by the agent for this service
+                cached_sigma: float | None = self._agent_sigma_cache.get(
+                    (client_id, svc)
+                )
+                # Only flag as early warning if sigma is in the 1.5–2.5 band
+                if cached_sigma is not None:
+                    if not (_EARLY_WARNING_LOWER_SIGMA <= cached_sigma <= _EARLY_WARNING_UPPER_SIGMA):
+                        # Outside the early-warning band — skip
+                        continue
+                    status = "early_warning"
+                else:
+                    # No sigma data yet — include as monitoring candidate
+                    status = "monitoring"
+
                 early_warnings.append({
-                    "service_name": row.get("service_name"),
+                    "service_name": svc,
                     "criticality": row.get("criticality"),
-                    "status": "monitoring",
-                    "sigma": None,  # Populated by agents when they report deviation
+                    "status": status,
+                    "sigma": cached_sigma,
                     "client_id": client_id,
                 })
+
             logger.info(
                 "correlation_engine.early_warning_scan",
                 client_id=client_id,
-                adjacent_services=len(early_warnings),
+                adjacent_services=len(results),
+                flagged=len([e for e in early_warnings if e["status"] == "early_warning"]),
             )
             return early_warnings
 

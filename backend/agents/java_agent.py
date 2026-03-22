@@ -87,6 +87,8 @@ class JavaAgent(BaseAgent):
         # Per-service metric windows
         self._error_rate_window: dict[str, list[float]] = {}
         self._response_time_window: dict[str, list[float]] = {}
+        # JVM heap utilisation (0.0–1.0) — populated when jvm_heap_used_pct is present in events
+        self._resource_util_window: dict[str, list[float]] = {}
         # Per-service silence tracking
         self._last_event_per_service: dict[str, datetime] = {}
 
@@ -98,6 +100,7 @@ class JavaAgent(BaseAgent):
             self._conformal[service_name] = ConformalPredictor(self._client_id, service_name)
             self._error_rate_window[service_name] = []
             self._response_time_window[service_name] = []
+            self._resource_util_window[service_name] = []
 
     # ------------------------------------------------------------------
     # BaseAgent interface
@@ -147,6 +150,27 @@ class JavaAgent(BaseAgent):
                 self._response_time_window[service_name].append(float(duration_ms))
                 if len(self._response_time_window[service_name]) > 200:
                     self._response_time_window[service_name] = self._response_time_window[service_name][-200:]
+            except (TypeError, ValueError):
+                pass
+
+        # Extract JVM heap utilisation if present (from JMX or OTel JVM metrics)
+        # Accepts: jvm_heap_used_pct (0.0–1.0), jvm_heap_used_bytes + jvm_heap_max_bytes
+        jvm_heap_pct = event.get("jvm_heap_used_pct")
+        if jvm_heap_pct is None:
+            used = event.get("jvm_heap_used_bytes")
+            max_heap = event.get("jvm_heap_max_bytes")
+            if used is not None and max_heap and float(max_heap) > 0:
+                try:
+                    jvm_heap_pct = float(used) / float(max_heap)
+                except (TypeError, ValueError):
+                    pass
+        if jvm_heap_pct is not None:
+            try:
+                pct = float(jvm_heap_pct)
+                pct = min(max(pct, 0.0), 1.0)
+                self._resource_util_window[service_name].append(pct)
+                if len(self._resource_util_window[service_name]) > 200:
+                    self._resource_util_window[service_name] = self._resource_util_window[service_name][-200:]
             except (TypeError, ValueError):
                 pass
 
@@ -327,12 +351,25 @@ class JavaAgent(BaseAgent):
         """
         Build the feature observation dict for the Isolation Forest.
         All features are derived from the rolling windows maintained per service.
+        resource_utilisation is derived from the error rate window as a proxy
+        when JVM heap metrics are not available via JMX. When JVM heap data is
+        present in events (field: jvm_heap_used_pct), it is stored in
+        _resource_util_window and used directly.
         """
         error_window = self._error_rate_window.get(service_name, [])
         error_rate = sum(error_window) / max(len(error_window), 1)
 
         response_window = self._response_time_window.get(service_name, [])
         response_p95 = float(sorted(response_window)[int(len(response_window) * 0.95)]) if len(response_window) >= 20 else 0.0
+
+        # resource_utilisation: use JVM heap % if available, else derive from
+        # HTTP 5xx rate as a proxy (high error rate correlates with resource pressure).
+        resource_util_window = self._resource_util_window.get(service_name, [])
+        if resource_util_window:
+            resource_utilisation = resource_util_window[-1]
+        else:
+            # Proxy: sustained error rate above 10% suggests resource pressure
+            resource_utilisation = min(1.0, error_rate * 5.0)
 
         # Error code frequency: count occurrences of each critical pattern in the log buffer
         log_buf = self._log_buffer.get(service_name, [])
@@ -347,7 +384,7 @@ class JavaAgent(BaseAgent):
         return {
             "error_rate": error_rate,
             "response_time_p95": response_p95,
-            "resource_utilisation": 0.0,  # populated when JMX/metrics endpoint is available
+            "resource_utilisation": resource_utilisation,
             "error_code_freq_0": pattern_counts[0],
             "error_code_freq_1": pattern_counts[1],
             "error_code_freq_2": pattern_counts[2],

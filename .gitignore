@@ -50,16 +50,24 @@ yarn-error.log*
 
 # Data / Models
 data/chromadb/
-data/fallbacks/*.json
+# data/fallbacks/ — fallback JSON files ARE committed (pre-computed LLM responses)
 *.pt
 *.bin
 *.safetensors
 __pycache__/
 
-# Database
+# HuggingFace / Torch model cache (downloaded at runtime, never committed)
+.cache/
+~/.cache/huggingface/
+huggingface_cache/
+torch_cache/
+
+# Database — runtime state, never committed
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Secrets / Keys
 *.pem

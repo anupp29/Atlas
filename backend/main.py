@@ -775,6 +775,17 @@ async def _route_event_to_agent(
 
     await agent.ingest(event)
     pkg = agent.get_evidence()
+
+    # Report current sigma to the correlation engine for early warning tracking.
+    # This keeps the sigma cache fresh for all monitored services, not just those
+    # that have fired an EvidencePackage.
+    if hasattr(agent, "compute_sigma") and hasattr(agent, "_error_rate_window"):
+        error_window = agent._error_rate_window.get(source_system, [])
+        if error_window:
+            current_error_rate = sum(error_window) / len(error_window)
+            sigma = agent.compute_sigma("error_rate", current_error_rate)
+            correlation_engine.report_service_sigma(client_id, source_system, sigma)
+
     if pkg is None:
         return None
 

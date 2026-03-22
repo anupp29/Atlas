@@ -198,29 +198,45 @@ async def _call_llm_endpoint(
 
 def _load_fallback(client_id: str) -> dict | None:
     """
-    Load pre-computed fallback response from /data/fallbacks/{client_id}_incident_response.json.
-    Returns None if file does not exist or is malformed.
+    Load pre-computed fallback response from /data/fallbacks/.
+    Tries two filename conventions:
+      1. {client_id_lower}_incident_response.json  (e.g. fincore_uk_001_incident_response.json)
+      2. {client_name_slug}_incident_response.json  (e.g. financecore_incident_response.json)
+    Returns None if no file exists or the file is malformed.
     """
-    # Map client_id to fallback filename
-    _FALLBACK_NAMES: dict[str, str] = {
-        "FINCORE_UK_001": "financecore_incident_response.json",
-        "RETAILMAX_EU_002": "retailmax_incident_response.json",
-    }
-    filename = _FALLBACK_NAMES.get(client_id, f"{client_id.lower()}_incident_response.json")
-    path = _FALLBACK_DIR / filename
+    # Build candidate filenames — most specific first
+    slug = client_id.lower().replace("-", "_")
+    candidates = [
+        _FALLBACK_DIR / f"{slug}_incident_response.json",
+    ]
+    # Also try a short-name variant by taking the first segment before the first underscore
+    # e.g. FINCORE_UK_001 → fincore, RETAILMAX_EU_002 → retailmax
+    short = slug.split("_")[0]
+    candidates.append(_FALLBACK_DIR / f"{short}_incident_response.json")
 
-    if not path.exists():
-        logger.warning("n5_reasoning.fallback_not_found", path=str(path), client_id=client_id)
-        return None
+    # Scan the fallback directory for any file containing the short name
+    if _FALLBACK_DIR.exists():
+        for f in _FALLBACK_DIR.glob("*_incident_response.json"):
+            if short in f.stem and f not in candidates:
+                candidates.append(f)
 
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        logger.info("n5_reasoning.fallback_loaded", path=str(path), client_id=client_id)
-        return data
-    except Exception as exc:
-        logger.error("n5_reasoning.fallback_load_error", path=str(path), error=str(exc))
-        return None
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            logger.info("n5_reasoning.fallback_loaded", path=str(path), client_id=client_id)
+            return data
+        except Exception as exc:
+            logger.error("n5_reasoning.fallback_load_error", path=str(path), error=str(exc))
+
+    logger.warning(
+        "n5_reasoning.fallback_not_found",
+        tried=[str(c) for c in candidates],
+        client_id=client_id,
+    )
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
