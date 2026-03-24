@@ -61,72 +61,88 @@ export function nowUTC(): string {
   return format(new Date(), 'HH:mm:ss') + ' UTC'
 }
 
-/** Map activity entry type to Tailwind border colour class */
+/** Map activity entry type to left-border colour class */
 export function activityBorderClass(type: string): string {
   switch (type) {
-    case 'agent_detection':  return 'border-l-orange-500'
-    case 'orchestrator_node': return 'border-l-blue-500'
-    case 'human_action':     return 'border-l-green-500'
-    case 'veto_fired':       return 'border-l-red-500'
-    case 'resolution':       return 'border-l-teal-500'
-    case 'early_warning':    return 'border-l-amber-500'
-    case 'execution':        return 'border-l-blue-400'
-    case 'cmdb_change':      return 'border-l-yellow-500'
-    case 'incident_created': return 'border-l-red-400'
-    default:                 return 'border-l-zinc-600'
+    case 'agent_detection':   return 'border-l-orange-400'
+    case 'orchestrator_node': return 'border-l-blue-400'
+    case 'human_action':      return 'border-l-emerald-500'
+    case 'veto_fired':        return 'border-l-red-500'
+    case 'resolution':        return 'border-l-teal-500'
+    case 'early_warning':     return 'border-l-amber-500'
+    case 'execution':         return 'border-l-blue-500'
+    case 'cmdb_change':       return 'border-l-yellow-500'
+    case 'incident_created':  return 'border-l-red-400'
+    default:                  return 'border-l-slate-300'
   }
 }
 
-/** Map severity to log line colour */
+/** Map activity type to icon */
+export function activityIcon(type: string): string {
+  switch (type) {
+    case 'agent_detection':   return '🔍'
+    case 'orchestrator_node': return '⚙️'
+    case 'human_action':      return '👤'
+    case 'veto_fired':        return '⛔'
+    case 'resolution':        return '✅'
+    case 'early_warning':     return '⚠️'
+    case 'execution':         return '▶️'
+    case 'cmdb_change':       return '📋'
+    case 'incident_created':  return '🚨'
+    default:                  return '•'
+  }
+}
+
+/** Map severity to log line colour — light theme */
 export function logSeverityClass(severity: string): string {
   switch (severity.toUpperCase()) {
-    case 'FATAL': return 'text-red-400 border-l-2 border-l-red-500'
-    case 'ERROR': return 'text-red-300 border-l-2 border-l-red-500'
-    case 'WARN':  return 'text-amber-300 border-l-2 border-l-amber-500'
-    case 'INFO':  return 'text-zinc-300'
-    case 'DEBUG': return 'text-zinc-500'
-    default:      return 'text-zinc-400'
+    case 'FATAL': return 'text-red-700 bg-red-50 border-l-2 border-l-red-500'
+    case 'ERROR': return 'text-red-600 bg-red-50/60 border-l-2 border-l-red-400'
+    case 'WARN':  return 'text-amber-700 bg-amber-50/60 border-l-2 border-l-amber-400'
+    case 'INFO':  return 'text-slate-700'
+    case 'DEBUG': return 'text-slate-400'
+    default:      return 'text-slate-600'
   }
 }
 
-/** Map compliance framework to badge colours */
+/** Map compliance framework to badge colours — light theme */
 export function complianceBadgeClass(framework: string): string {
   switch (framework.toUpperCase()) {
-    case 'PCI-DSS':  return 'bg-red-950 text-red-300 border border-red-800'
-    case 'SOX':      return 'bg-amber-950 text-amber-300 border border-amber-800'
-    case 'GDPR':     return 'bg-blue-950 text-blue-300 border border-blue-800'
-    case 'ISO-27001': return 'bg-zinc-800 text-zinc-300 border border-zinc-600'
-    default:         return 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+    case 'PCI-DSS':   return 'bg-red-50 text-red-700 border border-red-200'
+    case 'SOX':       return 'bg-amber-50 text-amber-700 border border-amber-200'
+    case 'GDPR':      return 'bg-blue-50 text-blue-700 border border-blue-200'
+    case 'ISO-27001': return 'bg-slate-100 text-slate-600 border border-slate-200'
+    default:          return 'bg-slate-100 text-slate-500 border border-slate-200'
   }
 }
 
-/** Map action class to badge colours */
+/** Map action class to badge colours — light theme */
 export function actionClassBadge(cls: number): { label: string; className: string } {
   switch (cls) {
-    case 1: return { label: 'Class 1', className: 'bg-green-950 text-green-300 border border-green-800' }
-    case 2: return { label: 'Class 2', className: 'bg-amber-950 text-amber-300 border border-amber-800' }
-    case 3: return { label: 'Class 3', className: 'bg-red-950 text-red-300 border border-red-800' }
-    default: return { label: `Class ${cls}`, className: 'bg-zinc-800 text-zinc-400 border border-zinc-700' }
+    case 1: return { label: 'Class 1', className: 'bg-emerald-50 text-emerald-700 border border-emerald-200' }
+    case 2: return { label: 'Class 2', className: 'bg-amber-50 text-amber-700 border border-amber-200' }
+    case 3: return { label: 'Class 3', className: 'bg-red-50 text-red-700 border border-red-200' }
+    default: return { label: `Class ${cls}`, className: 'bg-slate-100 text-slate-500 border border-slate-200' }
   }
 }
 
-/** Map priority to colour */
+/** Map priority to colour — light theme */
 export function priorityClass(priority: string): string {
   switch (priority) {
-    case 'P1': return 'text-red-400 bg-red-950 border border-red-800'
-    case 'P2': return 'text-orange-400 bg-orange-950 border border-orange-800'
-    case 'P3': return 'text-amber-400 bg-amber-950 border border-amber-800'
-    case 'P4': return 'text-zinc-400 bg-zinc-800 border border-zinc-700'
-    default:   return 'text-zinc-400 bg-zinc-800 border border-zinc-700'
+    case 'P1': return 'text-red-700 bg-red-50 border border-red-200'
+    case 'P2': return 'text-orange-700 bg-orange-50 border border-orange-200'
+    case 'P3': return 'text-amber-700 bg-amber-50 border border-amber-200'
+    case 'P4': return 'text-slate-600 bg-slate-100 border border-slate-200'
+    default:   return 'text-slate-600 bg-slate-100 border border-slate-200'
   }
 }
 
 /** SHAP bar colour by feature name */
 export function shapBarColour(feature: string): string {
   const f = feature.toLowerCase()
-  if (f.includes('error') || f.includes('rejection') || f.includes('fatal')) return '#EF4444'
-  if (f.includes('latency') || f.includes('response_time') || f.includes('p95')) return '#F97316'
-  if (f.includes('memory') || f.includes('resource') || f.includes('heap')) return '#EAB308'
-  if (f.includes('connection') || f.includes('pool')) return '#EF4444'
-  return '#6B7280'
+  if (f.includes('error') || f.includes('rejection') || f.includes('fatal')) return '#DC2626'
+  if (f.includes('latency') || f.includes('response_time') || f.includes('p95')) return '#EA580C'
+  if (f.includes('memory') || f.includes('resource') || f.includes('heap')) return '#D97706'
+  if (f.includes('connection') || f.includes('pool')) return '#DC2626'
+  return '#64748B'
 }

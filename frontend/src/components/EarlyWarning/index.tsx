@@ -14,11 +14,11 @@ export function EarlyWarning({ signals }: EarlyWarningProps) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35 }}
-      className="rounded-lg border-l-4 border-l-warning border border-amber-900/50 bg-[#1C1500] p-4"
+      className="rounded-xl border-l-4 border-l-amber-400 border border-amber-200 bg-amber-50 p-4"
     >
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-warning text-sm">⚠</span>
-        <h4 className="text-xs font-semibold uppercase tracking-widest text-amber-400">
+        <span className="text-amber-500 text-base">⚠</span>
+        <h4 className="text-xs font-semibold uppercase tracking-widest text-amber-700">
           Early Warning — Adjacent Services
         </h4>
       </div>
@@ -27,27 +27,27 @@ export function EarlyWarning({ signals }: EarlyWarningProps) {
         {signals.map(signal => (
           <div
             key={signal.service_name}
-            className="flex items-center justify-between text-xs"
+            className="flex items-center justify-between text-xs bg-white/60 rounded-lg px-3 py-2 border border-amber-100"
           >
-            <span className="text-zinc-300 font-medium">{signal.service_name}</span>
+            <span className="text-ink font-medium">{signal.service_name}</span>
             <div className="flex items-center gap-3">
-              <span className="font-mono text-amber-300 font-semibold">
+              <span className="font-mono text-amber-700 font-bold">
                 {signal.deviation_sigma.toFixed(1)}σ
               </span>
-              <span className="text-amber-500">
+              <span className={
+                signal.trend === 'rising' ? 'text-red-500 font-bold' :
+                signal.trend === 'falling' ? 'text-emerald-600' : 'text-slate-400'
+              }>
                 {signal.trend === 'rising' ? '↑' : signal.trend === 'falling' ? '↓' : '→'}
               </span>
-              <span className="text-zinc-500">
-                {relativeTime(signal.detected_at)}
-              </span>
+              <span className="text-faint">{relativeTime(signal.detected_at)}</span>
             </div>
           </div>
         ))}
       </div>
 
-      <p className="text-xs text-zinc-600 mt-3 leading-relaxed">
-        These services are below alert threshold but showing deviation from baseline.
-        Monitoring elevated.
+      <p className="text-xs text-amber-600 mt-3 leading-relaxed">
+        Below alert threshold but showing deviation from baseline. Monitoring elevated.
       </p>
     </motion.div>
   )

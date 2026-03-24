@@ -6,6 +6,7 @@ T+0 through T+75 minutes. Run this to feed the detection agents during demo.
 Usage:
     python data/fault_scripts/financecore_cascade.py
     python data/fault_scripts/financecore_cascade.py --replay  # instant output, no sleep
+    python data/fault_scripts/financecore_cascade.py --replay --endpoint http://localhost:8000
 """
 
 from __future__ import annotations
@@ -13,13 +14,48 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import urllib.request
+import urllib.error
+import json
 from datetime import datetime, timezone, timedelta
+
+CLIENT_ID = "FINCORE_UK_001"
+DEFAULT_ENDPOINT = "http://localhost:8000"
 
 
 def _ts(offset_seconds: int = 0) -> str:
     """Return ISO-8601 UTC timestamp with optional offset from now."""
     t = datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)
     return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _post_line(endpoint: str, source: str, severity: str, line: str) -> None:
+    """POST a single log line to the ATLAS ingest endpoint."""
+    payload = json.dumps({
+        "client_id": CLIENT_ID,
+        "source": source,
+        "severity": severity,
+        "line": line,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{endpoint}/api/logs/ingest",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except urllib.error.URLError as exc:
+        print(f"[WARN] ingest failed: {exc}", file=sys.stderr, flush=True)
+
+
+def _emit(endpoint: str, source: str, severity: str, lines: list[str]) -> None:
+    """Print lines to stdout and POST each to the ingest endpoint."""
+    for line in lines:
+        print(line, flush=True)
+        _post_line(endpoint, source, severity, line)
 
 
 # ---------------------------------------------------------------------------
@@ -86,59 +122,58 @@ def _k8s_restart(ts: str) -> list[str]:
 # Scenario timeline
 # ---------------------------------------------------------------------------
 
-SCENARIO: list[tuple[int, list[str]]] = []
+SCENARIO: list[tuple[int, str, str, list[str]]] = []
 
 # T-3 min to T+0: normal operations (every 30s)
 for _offset in range(-180, 0, 30):
-    SCENARIO.append((_offset, _java_normal(_ts(_offset))))
-    SCENARIO.append((_offset + 5, _pg_normal(_ts(_offset + 5))))
+    SCENARIO.append((_offset, "PaymentAPI", "INFO", _java_normal(_ts(_offset))))
+    SCENARIO.append((_offset + 5, "TransactionDB", "INFO", _pg_normal(_ts(_offset + 5))))
 
 # T+0 to T+25: connection count warnings, increasing frequency
 for _offset in range(0, 25 * 60, 30):
-    pct = 72 + (_offset // 60) * 2  # climbs from 72% to ~120% (capped at 95 in messages)
+    pct = 72 + (_offset // 60) * 2
     pct = min(pct, 95)
-    SCENARIO.append((_offset, _pg_warning(_ts(_offset), pct)))
-    SCENARIO.append((_offset + 10, _java_normal(_ts(_offset + 10))))
+    SCENARIO.append((_offset, "TransactionDB", "WARN", _pg_warning(_ts(_offset), pct)))
+    SCENARIO.append((_offset + 10, "PaymentAPI", "INFO", _java_normal(_ts(_offset + 10))))
 
 # T+25 to T+35: HikariCP timeouts, 1 per 10s
 for _offset in range(25 * 60, 35 * 60, 10):
-    SCENARIO.append((_offset, _pg_hikari_timeout(_ts(_offset))))
-    SCENARIO.append((_offset + 5, _pg_warning(_ts(_offset + 5), 92)))
+    SCENARIO.append((_offset, "TransactionDB", "ERROR", _pg_hikari_timeout(_ts(_offset))))
+    SCENARIO.append((_offset + 5, "TransactionDB", "WARN", _pg_warning(_ts(_offset + 5), 92)))
 
 # T+35: FATAL connection pool exhaustion — PostgreSQL agent fires
-SCENARIO.append((35 * 60, _pg_fatal(_ts(35 * 60))))
+SCENARIO.append((35 * 60, "TransactionDB", "ERROR", _pg_fatal(_ts(35 * 60))))
 
 # T+45: Java 503 cascade — Java agent fires
 for _offset in range(45 * 60, 60 * 60, 15):
-    SCENARIO.append((_offset, _java_503(_ts(_offset))))
+    SCENARIO.append((_offset, "PaymentAPI", "ERROR", _java_503(_ts(_offset))))
 
 # T+60: Kubernetes pod restarts
-SCENARIO.append((60 * 60, _k8s_restart(_ts(60 * 60))))
-SCENARIO.append((62 * 60, _k8s_restart(_ts(62 * 60))))
+SCENARIO.append((60 * 60, "PaymentAPI", "WARN", _k8s_restart(_ts(60 * 60))))
+SCENARIO.append((62 * 60, "PaymentAPI", "WARN", _k8s_restart(_ts(62 * 60))))
 
 # T+65 to T+75: continued degradation
 for _offset in range(65 * 60, 75 * 60, 20):
-    SCENARIO.append((_offset, _pg_fatal(_ts(_offset))))
-    SCENARIO.append((_offset + 10, _java_503(_ts(_offset + 10))))
+    SCENARIO.append((_offset, "TransactionDB", "ERROR", _pg_fatal(_ts(_offset))))
+    SCENARIO.append((_offset + 10, "PaymentAPI", "ERROR", _java_503(_ts(_offset + 10))))
 
 # Sort by offset
 SCENARIO.sort(key=lambda x: x[0])
 
 
-def run(replay: bool = False) -> None:
-    """Emit log lines. In replay mode, no sleep — instant output for testing."""
-    print(f"[financecore_cascade] Starting fault simulation. replay={replay}", flush=True)
+def run(replay: bool = False, endpoint: str = DEFAULT_ENDPOINT) -> None:
+    """Emit log lines and POST to ATLAS ingest endpoint."""
+    print(f"[financecore_cascade] Starting fault simulation. replay={replay} endpoint={endpoint}", flush=True)
     base_time = time.monotonic()
 
-    for offset_seconds, lines in SCENARIO:
+    for offset_seconds, source, severity, lines in SCENARIO:
         if not replay:
             target = base_time + offset_seconds
             now = time.monotonic()
             if target > now:
                 time.sleep(target - now)
 
-        for line in lines:
-            print(line, flush=True)
+        _emit(endpoint, source, severity, lines)
 
     print("[financecore_cascade] Scenario complete.", flush=True)
 
@@ -146,5 +181,6 @@ def run(replay: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FinanceCore cascade fault simulation")
     parser.add_argument("--replay", action="store_true", help="Instant output, no sleep")
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="ATLAS backend URL")
     args = parser.parse_args()
-    run(replay=args.replay)
+    run(replay=args.replay, endpoint=args.endpoint)

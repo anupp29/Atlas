@@ -5,7 +5,6 @@ import { StatusDot } from '@/components/ui/StatusDot'
 import { Badge } from '@/components/ui/Badge'
 import type { ClientHealth } from '@/types/atlas'
 
-// Static client definitions — health status is overridden by WebSocket
 const CLIENTS: ClientHealth[] = [
   {
     client_id: 'FINCORE_UK_001',
@@ -43,6 +42,14 @@ const TRUST_STAGE_LABELS: Record<number, string> = {
   4: 'L2 Automation',
 }
 
+const TRUST_COLOURS: Record<number, string> = {
+  0: 'bg-slate-300',
+  1: 'bg-blue-400',
+  2: 'bg-emerald-500',
+  3: 'bg-violet-500',
+  4: 'bg-amber-500',
+}
+
 interface ClientRosterProps {
   selectedClientId: string
   onSelectClient: (clientId: string) => void
@@ -56,7 +63,11 @@ export function ClientRoster({
   incidentCounts,
   healthStatuses,
 }: ClientRosterProps) {
-  const [trustData, setTrustData] = useState<Record<string, { trust_level: number; sla_uptime_percent: number; progression_metrics: { incident_count: number; accuracy_rate: number } }>>({})
+  const [trustData, setTrustData] = useState<Record<string, {
+    trust_level: number
+    sla_uptime_percent: number
+    progression_metrics: { incident_count: number; accuracy_rate: number }
+  }>>({})
 
   useEffect(() => {
     CLIENTS.forEach(c => {
@@ -68,11 +79,12 @@ export function ClientRoster({
   }, [])
 
   return (
-    <aside className="w-72 shrink-0 border-r border-border bg-canvas flex flex-col overflow-y-auto">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-500">
+    <aside className="w-72 shrink-0 border-r border-border bg-white flex flex-col overflow-y-auto">
+      <div className="px-4 py-3 border-b border-border bg-slate-50">
+        <h2 className="text-xs font-semibold uppercase tracking-widest text-subtle">
           Client Roster
         </h2>
+        <p className="text-xs text-faint mt-0.5">{CLIENTS.length} clients monitored</p>
       </div>
 
       <div className="flex flex-col gap-2 p-3">
@@ -97,10 +109,10 @@ export function ClientRoster({
               whileTap={{ scale: 0.99 }}
               transition={{ duration: 0.12 }}
               className={cn(
-                'w-full text-left rounded-lg border p-3.5 transition-colors duration-200',
+                'w-full text-left rounded-xl border p-3.5 transition-all duration-200',
                 isSelected
-                  ? 'border-blue-600 bg-blue-950/30 shadow-[0_0_16px_rgba(59,130,246,0.12)]'
-                  : 'border-border bg-surface hover:border-zinc-600 hover:bg-elevated',
+                  ? 'border-blue-300 bg-blue-50 shadow-card-md ring-1 ring-blue-200'
+                  : 'border-border bg-white hover:border-slate-300 hover:shadow-card',
               )}
             >
               {/* Header row */}
@@ -108,17 +120,17 @@ export function ClientRoster({
                 <div>
                   <div className="flex items-center gap-2">
                     <StatusDot status={health} size="md" />
-                    <span className="text-sm font-semibold text-white leading-tight">
+                    <span className="text-sm font-semibold text-ink leading-tight">
                       {client.client_name}
                     </span>
                   </div>
-                  <span className="text-xs text-zinc-500 mt-0.5 block">{client.region}</span>
+                  <span className="text-xs text-faint mt-0.5 block">{client.region}</span>
                 </div>
                 {incidentCount > 0 && (
                   <motion.span
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
-                    className="flex items-center justify-center w-5 h-5 rounded-full bg-incident text-white text-xs font-bold"
+                    className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold shadow-sm"
                   >
                     {incidentCount}
                   </motion.span>
@@ -130,7 +142,7 @@ export function ClientRoster({
                 {client.tech_stack.map(t => (
                   <span
                     key={t}
-                    className="px-1.5 py-0.5 rounded text-xs bg-elevated text-zinc-300 border border-border"
+                    className="px-1.5 py-0.5 rounded-md text-xs bg-slate-100 text-subtle border border-slate-200"
                   >
                     {t}
                   </span>
@@ -148,25 +160,25 @@ export function ClientRoster({
 
               {/* SLA uptime */}
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-zinc-500">SLA Uptime</span>
-                <span className="font-mono text-xs text-healthy font-medium">
+                <span className="text-xs text-faint">SLA Uptime</span>
+                <span className="font-mono text-xs text-emerald-700 font-semibold">
                   {slaUptime.toFixed(2)}%
                 </span>
               </div>
 
               {/* Trust progress */}
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-zinc-500">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-subtle font-medium">
                     Stage {trustLevel} — {stageName}
                   </span>
                   {trustLevel < 4 && (
-                    <span className="text-xs text-zinc-600">→ Stage {trustLevel + 1}</span>
+                    <span className="text-xs text-faint">→ Stage {trustLevel + 1}</span>
                   )}
                 </div>
-                <div className="h-1 rounded-full bg-elevated overflow-hidden">
+                <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                   <motion.div
-                    className="h-full rounded-full bg-healthy"
+                    className={cn('h-full rounded-full', TRUST_COLOURS[trustLevel] ?? 'bg-slate-300')}
                     initial={{ width: 0 }}
                     animate={{ width: `${trustLevel >= 4 ? 100 : progressPct}%` }}
                     transition={{ duration: 0.8, ease: 'easeOut' }}
@@ -176,13 +188,6 @@ export function ClientRoster({
             </motion.button>
           )
         })}
-      </div>
-
-      {/* Footer */}
-      <div className="mt-auto px-4 py-3 border-t border-border">
-        <p className="text-xs text-zinc-600 text-center">
-          {CLIENTS.length} clients monitored
-        </p>
       </div>
     </aside>
   )

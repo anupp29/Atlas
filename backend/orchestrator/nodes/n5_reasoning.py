@@ -214,6 +214,16 @@ def _load_fallback(client_id: str) -> dict | None:
     short = slug.split("_")[0]
     candidates.append(_FALLBACK_DIR / f"{short}_incident_response.json")
 
+    # Explicit known mappings for demo clients
+    _KNOWN_FALLBACKS = {
+        "FINCORE_UK_001": "financecore_incident_response.json",
+        "RETAILMAX_EU_002": "retailmax_incident_response.json",
+    }
+    if client_id in _KNOWN_FALLBACKS:
+        known = _FALLBACK_DIR / _KNOWN_FALLBACKS[client_id]
+        if known not in candidates:
+            candidates.insert(0, known)
+
     # Scan the fallback directory for any file containing the short name
     if _FALLBACK_DIR.exists():
         for f in _FALLBACK_DIR.glob("*_incident_response.json"):

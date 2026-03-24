@@ -1,0 +1,25 @@
+{
+  "root_cause": "HikariCP connection pool exhaustion on PaymentAPI caused by deployment CHG0089234 which reduced maxPoolSize from 100 to 40 three days ago. Under normal peak load the reduced pool is insufficient, causing connection timeouts that cascade to TransactionDB and trigger HTTP 503 responses across the payment processing chain.",
+  "confidence_factors": {
+    "deployment_correlation": 0.95,
+    "historical_match": 0.91,
+    "evidence_strength": 0.88
+  },
+  "recommended_action_id": "connection-pool-recovery-v2",
+  "alternative_hypotheses": [
+    {
+      "hypothesis": "Connection leak in PaymentAPI application code causing pool exhaustion independent of pool size configuration",
+      "evidence_for": "Connection count climbed gradually over 35 minutes rather than spiking immediately after deployment, which is consistent with a slow leak pattern",
+      "evidence_against": "INC-2024-0847 four months ago showed identical pattern resolved by restoring pool size to 150, not by fixing application code. CHG0089234 directly reduced maxPoolSize from 100 to 40 three days ago.",
+      "confidence": 0.12
+    },
+    {
+      "hypothesis": "Upstream traffic spike exceeding normal peak load overwhelming the existing pool configuration",
+      "evidence_for": "PostgreSQL connection count reached 94% of max_connections suggesting high concurrent demand",
+      "evidence_against": "No anomaly detected in request rate metrics. The pool exhaustion began at normal traffic levels. Historical incident INC-2024-0847 confirms pool misconfiguration as root cause for this exact pattern.",
+      "confidence": 0.08
+    }
+  ],
+  "explanation_for_engineer": "PaymentAPI is experiencing HikariCP connection pool exhaustion triggered by deployment CHG0089234 three days ago, which reduced maxPoolSize from 100 to 40. Under current load this pool is insufficient — PostgreSQL shows 94% connection utilisation and HikariCP is timing out after 30 seconds. This is a direct repeat of INC-2024-0847 from four months ago which was resolved by restoring the pool to 150 connections. The recommended action will PATCH the Spring Boot Actuator endpoint to restore maxPoolSize to 150 and trigger a @RefreshScope rebind. PCI-DSS compliance requires dual engineer sign-off before execution.",
+  "technical_evidence_summary": "PostgreSQL agent: CONNECTION_POOL_EXHAUSTED, 94% of max_connections, FATAL: remaining connection slots reserved. Java agent: HikariPool-1 PoolTimeoutException after 30000ms, HTTP 503 on /api/v2/payments. Deployment correlation: CHG0089234 MODIFIED_CONFIG_OF PaymentAPI (maxPoolSize 100→40, 3 days ago, risk LOW). Historical match: INC-2024-0847 (similarity 0.91, same pattern, resolved by pool restore to 150, MTTR 23 min). Blast radius: TransactionDB, AuthService, NotificationService."
+}

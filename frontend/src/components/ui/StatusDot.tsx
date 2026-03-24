@@ -3,10 +3,10 @@ import { cn } from '@/lib/utils'
 type Status = 'healthy' | 'warning' | 'incident' | 'unknown'
 
 const colourMap: Record<Status, string> = {
-  healthy:  'bg-healthy',
-  warning:  'bg-warning',
-  incident: 'bg-incident',
-  unknown:  'bg-zinc-500',
+  healthy:  'bg-emerald-500',
+  warning:  'bg-amber-500',
+  incident: 'bg-red-500',
+  unknown:  'bg-slate-400',
 }
 
 const pulseMap: Record<Status, string> = {

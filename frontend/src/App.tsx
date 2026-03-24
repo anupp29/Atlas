@@ -8,6 +8,7 @@ import { BriefingCard } from '@/components/BriefingCard'
 import { L1Interface } from '@/components/L1Interface'
 import { PostResolution } from '@/components/PostResolution'
 import { useIncident } from '@/hooks/useIncident'
+import { useDemoTrigger } from '@/hooks/useDemoTrigger'
 import type { ClientHealth } from '@/types/atlas'
 
 type ViewMode = 'L1' | 'L2'
@@ -24,6 +25,8 @@ export default function App() {
     incidentStatus,
     activityStatus,
   } = useIncident(selectedClientId)
+
+  const { demoRunning, triggerDemo } = useDemoTrigger(setSelectedClientId)
 
   const isResolved = incident?.execution_status === 'resolved' || incident?.resolution_outcome === 'success'
 
@@ -55,7 +58,6 @@ export default function App() {
     if (!res.ok) throw new Error(`Modification failed: ${res.status}`)
   }, [])
 
-  // Derive health statuses and incident counts from active incident
   const healthStatuses: Record<string, ClientHealth['health_status']> = {
     [selectedClientId]: isActive ? 'incident' : 'healthy',
   }
@@ -64,8 +66,13 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-canvas text-white overflow-hidden">
-      <TopBar incidentStatus={incidentStatus} activityStatus={activityStatus} />
+    <div className="flex flex-col h-screen bg-canvas text-ink overflow-hidden">
+      <TopBar
+        incidentStatus={incidentStatus}
+        activityStatus={activityStatus}
+        onTriggerDemo={triggerDemo}
+        demoRunning={demoRunning}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel */}
@@ -77,19 +84,24 @@ export default function App() {
         />
 
         {/* Centre panel */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* View mode toggle — only shown when incident is active */}
+        <main className="flex-1 flex flex-col overflow-hidden bg-canvas">
+          {/* View mode toggle */}
           {isActive && !isResolved && (
-            <div className="flex items-center justify-end px-4 py-2 border-b border-border shrink-0 bg-canvas">
-              <div className="flex rounded-md border border-border overflow-hidden text-xs">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 bg-white">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs font-semibold text-red-700">Incident Active</span>
+                <span className="text-xs text-faint font-mono">{incident?.incident_id}</span>
+              </div>
+              <div className="flex rounded-lg border border-border overflow-hidden text-xs shadow-sm">
                 {(['L1', 'L2'] as ViewMode[]).map(mode => (
                   <button
                     key={mode}
                     onClick={() => setViewMode(mode)}
-                    className={`px-3 py-1.5 transition-colors ${
+                    className={`px-4 py-1.5 font-medium transition-colors ${
                       viewMode === mode
                         ? 'bg-blue-600 text-white'
-                        : 'bg-surface text-zinc-400 hover:text-zinc-200'
+                        : 'bg-white text-subtle hover:text-ink hover:bg-slate-50'
                     }`}
                   >
                     {mode} View
@@ -101,7 +113,6 @@ export default function App() {
 
           <div className="flex-1 overflow-y-auto">
             <AnimatePresence mode="wait">
-              {/* Post-resolution */}
               {isResolved && incident ? (
                 <motion.div
                   key="resolved"
@@ -109,19 +120,18 @@ export default function App() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.3 }}
-                  className="p-4"
+                  className="p-5"
                 >
                   <PostResolution incident={incident} />
                 </motion.div>
               ) : isActive && incident ? (
-                /* Active incident */
                 <motion.div
                   key="incident"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.3 }}
-                  className="p-4"
+                  className="p-5"
                 >
                   {viewMode === 'L1' ? (
                     <L1Interface
@@ -140,7 +150,6 @@ export default function App() {
                   )}
                 </motion.div>
               ) : (
-                /* Normal mode — log stream */
                 <motion.div
                   key="logs"
                   initial={{ opacity: 0 }}

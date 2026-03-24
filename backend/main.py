@@ -221,6 +221,10 @@ async def lifespan(app: FastAPI):
         background_tasks.append(task)
         logger.info("atlas.startup.monitoring_started", client_id=cid)
 
+    # Prune expired active incidents every 5 minutes
+    prune_task = asyncio.create_task(_incident_ttl_pruner())
+    background_tasks.append(prune_task)
+
     logger.info("atlas.startup.complete", clients=client_ids)
 
     yield
@@ -418,8 +422,10 @@ async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Pipeline resume failed: {exc}")
 
     # Update active incidents and broadcast
+    import time as _time
     final_state["thread_id"] = request.thread_id
     _active_incidents[request.thread_id] = final_state
+    _active_incidents_timestamps[request.thread_id] = _time.monotonic()
     await incident_manager.send_to_client(request.client_id, {
         "type": "incident_approved",
         "incident_id": request.incident_id,
@@ -470,8 +476,10 @@ async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
         logger.error("api.reject.pipeline_error", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Pipeline resume failed: {exc}")
 
+    import time as _time
     final_state["thread_id"] = request.thread_id
     _active_incidents[request.thread_id] = final_state
+    _active_incidents_timestamps[request.thread_id] = _time.monotonic()
     await activity_manager.broadcast({
         "type": "human_action",
         "action": "rejected",
@@ -709,6 +717,15 @@ async def _agent_monitoring_loop(client_id: str) -> None:
                 events.append(event)
 
             for event in events:
+                # Broadcast raw log line to WebSocket log stream subscribers
+                await log_manager.send_to_client(client_id, {
+                    "type": "log_line",
+                    "client_id": client_id,
+                    "source": event.get("source_system", "unknown"),
+                    "severity": event.get("severity", "INFO"),
+                    "line": event.get("raw_payload", event.get("message", "")),
+                    "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                })
                 # Route event to the appropriate specialist agent
                 result = await _route_event_to_agent(event, client_id, correlation_engine)
                 if result is not None:
@@ -723,6 +740,31 @@ async def _agent_monitoring_loop(client_id: str) -> None:
         except Exception as exc:
             logger.error("monitoring.error", client_id=client_id, error=str(exc))
             await asyncio.sleep(5)
+
+
+async def _incident_ttl_pruner() -> None:
+    """
+    Background task: prune expired entries from _active_incidents every 5 minutes.
+    Prevents unbounded memory growth during extended demo sessions or repeated runs.
+    """
+    import time as _time
+    while True:
+        try:
+            await asyncio.sleep(300)  # run every 5 minutes
+            now = _time.monotonic()
+            expired = [
+                tid for tid, ts in _active_incidents_timestamps.items()
+                if now - ts > _ACTIVE_INCIDENT_TTL_SECONDS
+            ]
+            for tid in expired:
+                _active_incidents.pop(tid, None)
+                _active_incidents_timestamps.pop(tid, None)
+            if expired:
+                logger.info("incidents.ttl_pruned", count=len(expired))
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning("incidents.ttl_pruner_error", error=str(exc))
 
 
 async def _route_event_to_agent(
@@ -1344,14 +1386,16 @@ def _infer_source_type(source: str, line: str) -> str:
     """Infer source_type from source name and log line content."""
     s = source.lower()
     l = line.lower()
-    if "redis" in s:
+    if "redis" in s or "cache" in s:
         return "redis"
-    if "postgres" in s or "transaction" in s or "pg" in s:
+    if "postgres" in s or "transaction" in s or "pg" in s or "transactiondb" in s:
         return "postgres"
-    if "node" in s or "cart" in s or "product" in s:
+    if "node" in s or "cart" in s or "product" in s or "cartservice" in s or "productapi" in s:
         return "nodejs"
     if "java" in l or "hikari" in l or "spring" in l or "payment" in s or "auth" in s:
         return "java-spring-boot"
+    if "kubernetes" in s or "kubernetes" in l or "k8s" in s:
+        return "kubernetes"
     return "unknown"
 
 

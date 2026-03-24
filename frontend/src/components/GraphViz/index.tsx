@@ -21,12 +21,21 @@ interface GLink {
 }
 
 const NODE_COLOURS: Record<GNode['status'], string> = {
-  normal:   '#6B7280',
-  warning:  '#F59E0B',
-  affected: '#F97316',
-  critical: '#EF4444',
-  deploy:   '#EAB308',
-  history:  '#8B5CF6',
+  normal:   '#94A3B8',
+  warning:  '#D97706',
+  affected: '#EA580C',
+  critical: '#DC2626',
+  deploy:   '#B45309',
+  history:  '#7C3AED',
+}
+
+const NODE_BG: Record<GNode['status'], string> = {
+  normal:   '#F1F5F9',
+  warning:  '#FFFBEB',
+  affected: '#FFF7ED',
+  critical: '#FEF2F2',
+  deploy:   '#FFFBEB',
+  history:  '#F5F3FF',
 }
 
 function buildGraphData(incident: AtlasState): { nodes: GNode[]; links: GLink[] } {
@@ -38,14 +47,12 @@ function buildGraphData(incident: AtlasState): { nodes: GNode[]; links: GLink[] 
     if (!seen.has(n.id)) { seen.add(n.id); nodes.push(n) }
   }
 
-  // Blast radius services
   incident.blast_radius.forEach((svc, i) => {
     const status: GNode['status'] = i === 0 ? 'critical' : i === 1 ? 'affected' : 'warning'
     addNode({ id: svc.name, name: svc.name, nodeType: 'service', status, properties: { criticality: svc.criticality } })
     if (i > 0) links.push({ source: incident.blast_radius[i - 1].name, target: svc.name, label: 'DEPENDS_ON' })
   })
 
-  // Deployment nodes
   incident.recent_deployments.forEach(dep => {
     addNode({
       id: dep.change_id,
@@ -59,7 +66,6 @@ function buildGraphData(incident: AtlasState): { nodes: GNode[]; links: GLink[] 
     }
   })
 
-  // Historical incident nodes
   incident.historical_graph_matches.slice(0, 1).forEach(h => {
     addNode({
       id: h.incident_id,
@@ -76,10 +82,6 @@ function buildGraphData(incident: AtlasState): { nodes: GNode[]; links: GLink[] 
   return { nodes, links }
 }
 
-/**
- * GraphViz renders the Neo4j traversal graph using react-force-graph-2d.
- * Falls back to a static SVG diagram if the dynamic library fails to load.
- */
 export function GraphViz({ incident }: GraphVizProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [ForceGraph, setForceGraph] = useState<React.ComponentType<unknown> | null>(null)
@@ -89,14 +91,12 @@ export function GraphViz({ incident }: GraphVizProps) {
 
   const { nodes, links } = useMemo(() => buildGraphData(incident), [incident])
 
-  // Lazy-load react-force-graph-2d
   useEffect(() => {
     import('react-force-graph-2d')
       .then(mod => setForceGraph(() => mod.default as React.ComponentType<unknown>))
       .catch(() => setLoadError(true))
   }, [])
 
-  // Drive animation steps
   useEffect(() => {
     if (nodes.length === 0) return
     const steps = nodes.length + links.length
@@ -105,49 +105,41 @@ export function GraphViz({ incident }: GraphVizProps) {
       step += 1
       setAnimStep(step)
       if (step >= steps) clearInterval(id)
-    }, 800)
+    }, 600)
     return () => clearInterval(id)
   }, [nodes.length, links.length])
 
-  const visibleNodes = useMemo(
-    () => nodes.slice(0, Math.max(1, animStep)),
-    [nodes, animStep],
-  )
-  const visibleLinks = useMemo(
-    () => links.slice(0, Math.max(0, animStep - nodes.length)),
-    [links, nodes.length, animStep],
-  )
+  const visibleNodes = useMemo(() => nodes.slice(0, Math.max(1, animStep)), [nodes, animStep])
+  const visibleLinks = useMemo(() => links.slice(0, Math.max(0, animStep - nodes.length)), [links, nodes.length, animStep])
 
   const nodeCanvasObject = useCallback(
     (node: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const n = node as GNode & { x: number; y: number }
       const colour = NODE_COLOURS[n.status]
-      const r = n.status === 'critical' ? 10 : n.status === 'deploy' ? 9 : 7
+      const bg = NODE_BG[n.status]
+      const r = n.status === 'critical' ? 11 : n.status === 'deploy' ? 10 : 8
 
-      // Glow
-      if (n.status !== 'normal') {
-        ctx.beginPath()
-        ctx.arc(n.x, n.y, r + 4, 0, 2 * Math.PI)
-        ctx.fillStyle = colour + '33'
-        ctx.fill()
-      }
+      // Shadow
+      ctx.shadowColor = colour + '40'
+      ctx.shadowBlur = 8
 
-      // Node circle
+      // Node circle with fill
       ctx.beginPath()
       ctx.arc(n.x, n.y, r, 0, 2 * Math.PI)
-      ctx.fillStyle = colour
+      ctx.fillStyle = bg
       ctx.fill()
-      ctx.strokeStyle = colour + 'AA'
-      ctx.lineWidth = 1.5
+      ctx.strokeStyle = colour
+      ctx.lineWidth = 2
       ctx.stroke()
+      ctx.shadowBlur = 0
 
       // Label
       const label = n.name.length > 14 ? n.name.slice(0, 13) + '…' : n.name
       const fontSize = Math.max(9, 11 / globalScale)
-      ctx.font = `${fontSize}px JetBrains Mono, monospace`
-      ctx.fillStyle = '#D1D5DB'
+      ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
+      ctx.fillStyle = '#0F172A'
       ctx.textAlign = 'center'
-      ctx.fillText(label, n.x, n.y + r + fontSize + 2)
+      ctx.fillText(label, n.x, n.y + r + fontSize + 3)
     },
     [],
   )
@@ -158,7 +150,8 @@ export function GraphViz({ incident }: GraphVizProps) {
 
   if (!ForceGraph) {
     return (
-      <div className="flex items-center justify-center h-64 text-zinc-600 text-xs">
+      <div className="flex items-center justify-center h-64 text-faint text-xs gap-2">
+        <span className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
         Loading graph…
       </div>
     )
@@ -180,22 +173,22 @@ export function GraphViz({ incident }: GraphVizProps) {
   }>
 
   return (
-    <div ref={containerRef} className="relative rounded-lg overflow-hidden bg-[#080C14] border border-border">
+    <div ref={containerRef} className="relative rounded-xl overflow-hidden bg-slate-50 border border-border">
       <FG
         graphData={{ nodes: visibleNodes, links: visibleLinks }}
         nodeCanvasObject={nodeCanvasObject}
         nodeCanvasObjectMode={() => 'replace'}
         linkColor={(link: unknown) => {
           const l = link as GLink
-          if (l.label === 'MODIFIED_CONFIG_OF') return '#EAB308'
-          if (l.label === 'AFFECTED') return '#EF4444'
-          return '#4B5563'
+          if (l.label === 'MODIFIED_CONFIG_OF') return '#D97706'
+          if (l.label === 'AFFECTED') return '#DC2626'
+          return '#CBD5E1'
         }}
         linkWidth={(link: unknown) => {
           const l = link as GLink
-          return l.label === 'MODIFIED_CONFIG_OF' ? 2 : 1.5
+          return l.label === 'MODIFIED_CONFIG_OF' ? 2.5 : 1.5
         }}
-        linkDirectionalArrowLength={4}
+        linkDirectionalArrowLength={5}
         linkDirectionalArrowRelPos={1}
         linkLabel={(link: unknown) => (link as GLink).label}
         onNodeHover={(node: unknown) => {
@@ -204,33 +197,32 @@ export function GraphViz({ incident }: GraphVizProps) {
           setTooltip({ node: n, x: n.x ?? 0, y: n.y ?? 0 })
         }}
         width={containerRef.current?.clientWidth ?? 560}
-        height={320}
-        backgroundColor="#080C14"
+        height={300}
+        backgroundColor="#F8FAFC"
       />
 
-      {/* Tooltip */}
       {tooltip && (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="absolute top-3 right-3 bg-elevated border border-border rounded-lg p-3 text-xs max-w-[200px] pointer-events-none z-10"
+          className="absolute top-3 right-3 bg-white border border-border rounded-xl p-3 text-xs max-w-[200px] pointer-events-none z-10 shadow-card-md"
         >
-          <div className="font-mono font-semibold text-white mb-1">{tooltip.node.name}</div>
+          <div className="font-mono font-semibold text-ink mb-1.5">{tooltip.node.name}</div>
           {Object.entries(tooltip.node.properties).map(([k, v]) => (
             <div key={k} className="flex justify-between gap-3">
-              <span className="text-zinc-500">{k}</span>
-              <span className="text-zinc-300 font-mono">{String(v)}</span>
+              <span className="text-faint">{k}</span>
+              <span className="text-subtle font-mono">{String(v)}</span>
             </div>
           ))}
         </motion.div>
       )}
 
       {/* Legend */}
-      <div className="absolute bottom-2 left-3 flex items-center gap-3 text-xs">
+      <div className="absolute bottom-2 left-3 flex items-center gap-3 text-xs bg-white/80 backdrop-blur-sm rounded-lg px-2 py-1 border border-border/50">
         {([['deploy', 'Deployment'], ['critical', 'Affected'], ['warning', 'At Risk'], ['history', 'Historical']] as [GNode['status'], string][]).map(([s, label]) => (
           <div key={s} className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full" style={{ background: NODE_COLOURS[s] }} />
-            <span className="text-zinc-500">{label}</span>
+            <span className="w-2 h-2 rounded-full border-2" style={{ borderColor: NODE_COLOURS[s], background: NODE_BG[s] }} />
+            <span className="text-subtle">{label}</span>
           </div>
         ))}
       </div>
@@ -238,47 +230,41 @@ export function GraphViz({ incident }: GraphVizProps) {
   )
 }
 
-/** Static SVG fallback when react-force-graph-2d fails — also plays pre-recorded video if available */
 function FallbackGraph({ nodes, links }: { nodes: GNode[]; links: GLink[] }) {
-  // Attempt to load pre-recorded animation video (recorded during testing per PLAN.md Task 6.3)
-  const videoSrc = '/fallback/graph_animation.mp4'
   const [videoFailed, setVideoFailed] = useState(false)
 
   if (!videoFailed) {
     return (
-      <div className="rounded-lg border border-border bg-[#080C14] overflow-hidden">
+      <div className="rounded-xl border border-border bg-slate-50 overflow-hidden">
         <video
-          src={videoSrc}
-          autoPlay
-          loop
-          muted
-          playsInline
+          src="/fallback/graph_animation.mp4"
+          autoPlay loop muted playsInline
           onError={() => setVideoFailed(true)}
           className="w-full"
-          style={{ maxHeight: 320 }}
+          style={{ maxHeight: 300 }}
         />
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg border border-border bg-[#080C14] p-4">
-      <p className="text-xs text-zinc-500 mb-3">Graph (static view)</p>
-      <div className="flex flex-wrap gap-2">
+    <div className="rounded-xl border border-border bg-slate-50 p-4">
+      <p className="text-xs text-faint mb-3 font-medium">Dependency Graph (static view)</p>
+      <div className="flex flex-wrap gap-2 mb-3">
         {nodes.map(n => (
           <div
             key={n.id}
-            className="px-2 py-1 rounded border text-xs font-mono"
-            style={{ borderColor: NODE_COLOURS[n.status], color: NODE_COLOURS[n.status] }}
+            className="px-2.5 py-1 rounded-lg border text-xs font-mono font-medium"
+            style={{ borderColor: NODE_COLOURS[n.status], color: NODE_COLOURS[n.status], background: NODE_BG[n.status] }}
           >
             {n.name}
           </div>
         ))}
       </div>
-      <div className="mt-2 space-y-1">
+      <div className="space-y-1">
         {links.map((l, i) => (
-          <div key={i} className="text-xs text-zinc-500 font-mono">
-            {l.source} →<span className="text-zinc-600 mx-1">{l.label}</span>→ {l.target}
+          <div key={i} className="text-xs text-subtle font-mono">
+            {l.source} <span className="text-faint mx-1">—{l.label}→</span> {l.target}
           </div>
         ))}
       </div>

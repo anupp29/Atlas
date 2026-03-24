@@ -76,11 +76,12 @@ class Neo4jClient:
             if not val:
                 raise EnvironmentError(f"Required environment variable '{var}' is not set.")
 
+        _conn_timeout = int(os.environ.get("NEO4J_CONNECTION_TIMEOUT", "10"))
         self._driver: AsyncDriver = AsyncGraphDatabase.driver(
             uri,
             auth=(username, password),
             max_connection_pool_size=50,
-            connection_timeout=10,
+            connection_timeout=_conn_timeout,
         )
         logger.info("neo4j_client.initialised", uri=uri)
 
@@ -169,7 +170,8 @@ class Neo4jClient:
                     error=str(exc),
                 )
                 if attempt < 3:
-                    await asyncio.sleep(2 ** attempt)
+                    _retry_sleep = float(os.environ.get("NEO4J_RETRY_SLEEP", str(2 ** attempt)))
+                    await asyncio.sleep(_retry_sleep)
             except Neo4jError as exc:
                 logger.error("neo4j_client.query_error", error=str(exc), cypher=cypher[:80])
                 return None
@@ -227,7 +229,8 @@ class Neo4jClient:
             except ServiceUnavailable as exc:
                 logger.warning("neo4j_client.write_unavailable", attempt=attempt, error=str(exc))
                 if attempt < 3:
-                    await asyncio.sleep(2 ** attempt)
+                    _retry_sleep = float(os.environ.get("NEO4J_RETRY_SLEEP", str(2 ** attempt)))
+                    await asyncio.sleep(_retry_sleep)
             except Neo4jError as exc:
                 logger.error("neo4j_client.write_error", error=str(exc))
                 return False

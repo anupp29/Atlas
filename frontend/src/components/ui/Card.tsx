@@ -8,17 +8,17 @@ interface CardProps {
 
 const glowMap = {
   none:  '',
-  red:   'shadow-[0_0_20px_rgba(239,68,68,0.15)]',
-  amber: 'shadow-[0_0_20px_rgba(245,158,11,0.15)]',
-  green: 'shadow-[0_0_20px_rgba(16,185,129,0.15)]',
-  blue:  'shadow-[0_0_20px_rgba(59,130,246,0.15)]',
+  red:   'shadow-glow-red ring-1 ring-red-200',
+  amber: 'shadow-glow-amber ring-1 ring-amber-200',
+  green: 'shadow-glow-green ring-1 ring-green-200',
+  blue:  'shadow-glow-blue ring-1 ring-blue-200',
 }
 
 export function Card({ children, className, glow = 'none' }: CardProps) {
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-surface',
+        'rounded-xl border border-border bg-surface shadow-card',
         glowMap[glow],
         className,
       )}
@@ -38,7 +38,7 @@ export function CardHeader({ children, className }: { children: React.ReactNode;
 
 export function CardTitle({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <h3 className={cn('text-xs font-semibold uppercase tracking-widest text-zinc-400', className)}>
+    <h3 className={cn('text-xs font-semibold uppercase tracking-widest text-subtle', className)}>
       {children}
     </h3>
   )

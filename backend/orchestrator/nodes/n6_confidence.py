@@ -255,15 +255,22 @@ def _run_vetoes(
                         pass
                 break
 
-    # Recent actions for duplicate check (from audit trail)
-    # audit_trail already fetched above when graph_unavailable is False;
-    # fetch it here unconditionally to cover the graph_unavailable=True path.
+    # Recent actions for duplicate check (from audit trail).
+    # Must filter by BOTH action_id AND service_name — filtering only by action_id
+    # causes the veto to fire on any prior execution of the same playbook on any service,
+    # which is incorrect. The veto is scoped to the same action on the same service.
     audit_trail_entries: list[dict] = state.get("audit_trail", [])
     recent_actions = [
-        {"client_id": client_id, "action_id": recommended_action_id, "service_name": service_name}
+        {
+            "client_id": entry.get("client_id", client_id),
+            "action_id": entry.get("action_id", ""),
+            "service_name": entry.get("service_name", ""),
+            "timestamp": entry.get("timestamp", ""),
+        }
         for entry in audit_trail_entries
         if entry.get("action") == "playbook_executed"
         and entry.get("action_id") == recommended_action_id
+        and entry.get("service_name") == service_name
     ]
 
     return run_all_vetoes(

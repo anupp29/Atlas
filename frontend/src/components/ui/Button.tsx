@@ -4,12 +4,12 @@ import { motion } from 'framer-motion'
 type Variant = 'approve' | 'modify' | 'reject' | 'escalate' | 'ghost' | 'primary'
 
 const variantMap: Record<Variant, string> = {
-  approve:  'bg-green-600 hover:bg-green-500 text-white border border-green-500 shadow-[0_0_12px_rgba(16,185,129,0.3)]',
-  modify:   'bg-amber-600 hover:bg-amber-500 text-white border border-amber-500',
-  reject:   'bg-red-700 hover:bg-red-600 text-white border border-red-600',
-  escalate: 'bg-amber-700 hover:bg-amber-600 text-white border border-amber-600',
-  ghost:    'bg-transparent hover:bg-elevated text-zinc-300 border border-border',
-  primary:  'bg-blue-600 hover:bg-blue-500 text-white border border-blue-500',
+  approve:  'bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-500 shadow-sm',
+  modify:   'bg-amber-500 hover:bg-amber-600 text-white border border-amber-400 shadow-sm',
+  reject:   'bg-red-600 hover:bg-red-700 text-white border border-red-500 shadow-sm',
+  escalate: 'bg-violet-600 hover:bg-violet-700 text-white border border-violet-500 shadow-sm',
+  ghost:    'bg-white hover:bg-slate-50 text-subtle border border-border shadow-sm',
+  primary:  'bg-blue-600 hover:bg-blue-700 text-white border border-blue-500 shadow-sm',
 }
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -19,9 +19,9 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const sizeMap = {
-  sm: 'px-3 py-1.5 text-xs',
-  md: 'px-4 py-2 text-sm',
-  lg: 'px-6 py-3 text-base',
+  sm: 'px-3 py-1.5 text-xs rounded-lg',
+  md: 'px-4 py-2 text-sm rounded-lg',
+  lg: 'px-5 py-2.5 text-sm rounded-lg',
 }
 
 export function Button({
@@ -40,7 +40,7 @@ export function Button({
       transition={{ duration: 0.1 }}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors duration-150',
+        'inline-flex items-center justify-center gap-2 font-medium transition-colors duration-150',
         'disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none',
         sizeMap[size],
         variantMap[variant],

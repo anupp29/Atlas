@@ -6,6 +6,7 @@ T+0 through T+60 minutes.
 Usage:
     python data/fault_scripts/retailmax_redis_oom.py
     python data/fault_scripts/retailmax_redis_oom.py --replay
+    python data/fault_scripts/retailmax_redis_oom.py --replay --endpoint http://localhost:8000
 """
 
 from __future__ import annotations
@@ -13,12 +14,47 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import urllib.request
+import urllib.error
+import json
 from datetime import datetime, timezone, timedelta
+
+CLIENT_ID = "RETAILMAX_EU_002"
+DEFAULT_ENDPOINT = "http://localhost:8000"
 
 
 def _ts(offset_seconds: int = 0) -> str:
     t = datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)
     return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _post_line(endpoint: str, source: str, severity: str, line: str) -> None:
+    """POST a single log line to the ATLAS ingest endpoint."""
+    payload = json.dumps({
+        "client_id": CLIENT_ID,
+        "source": source,
+        "severity": severity,
+        "line": line,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{endpoint}/api/logs/ingest",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except urllib.error.URLError as exc:
+        print(f"[WARN] ingest failed: {exc}", file=sys.stderr, flush=True)
+
+
+def _emit(endpoint: str, source: str, severity: str, lines: list[str]) -> None:
+    """Print lines to stdout and POST each to the ingest endpoint."""
+    for line in lines:
+        print(line, flush=True)
+        _post_line(endpoint, source, severity, line)
 
 
 # ---------------------------------------------------------------------------
@@ -94,59 +130,58 @@ def _node_latency_spike(ts: str) -> list[str]:
 # Scenario timeline
 # ---------------------------------------------------------------------------
 
-SCENARIO: list[tuple[int, list[str]]] = []
+SCENARIO: list[tuple[int, str, str, list[str]]] = []
 
 # T-3 min to T+0: normal operations
 for _offset in range(-180, 0, 30):
-    SCENARIO.append((_offset, _redis_normal(_ts(_offset), 280)))
-    SCENARIO.append((_offset + 5, _node_normal(_ts(_offset + 5))))
+    SCENARIO.append((_offset, "RedisCache", "INFO", _redis_normal(_ts(_offset), 280)))
+    SCENARIO.append((_offset + 5, "CartService", "INFO", _node_normal(_ts(_offset + 5))))
 
-# T+0 to T+20: memory climbing (noeviction policy means no evictions, memory grows)
+# T+0 to T+20: memory climbing
 for _offset in range(0, 20 * 60, 60):
-    mem = 380 + (_offset // 60) * 7  # climbs from 380MB toward 512MB
+    mem = 380 + (_offset // 60) * 7
     pct = int((mem / 512) * 100)
-    SCENARIO.append((_offset, _redis_memory_warning(_ts(_offset), mem, pct)))
-    SCENARIO.append((_offset + 20, _node_normal(_ts(_offset + 20))))
+    SCENARIO.append((_offset, "RedisCache", "WARN", _redis_memory_warning(_ts(_offset), mem, pct)))
+    SCENARIO.append((_offset + 20, "CartService", "INFO", _node_normal(_ts(_offset + 20))))
 
-# T+20 to T+30: approaching maxmemory, warnings intensify
+# T+20 to T+30: approaching maxmemory
 for _offset in range(20 * 60, 30 * 60, 30):
     mem = 490 + (_offset - 20 * 60) // 60
-    SCENARIO.append((_offset, _redis_memory_warning(_ts(_offset), mem, 96)))
+    SCENARIO.append((_offset, "RedisCache", "WARN", _redis_memory_warning(_ts(_offset), mem, 96)))
 
 # T+30: OOM hits — Redis agent fires
-SCENARIO.append((30 * 60, _redis_oom(_ts(30 * 60))))
+SCENARIO.append((30 * 60, "RedisCache", "ERROR", _redis_oom(_ts(30 * 60))))
 
 # T+30 to T+45: OOM rejections + Node.js errors cascade
 for _offset in range(30 * 60, 45 * 60, 15):
-    SCENARIO.append((_offset, _redis_rejected(_ts(_offset), 47 + _offset // 60)))
-    SCENARIO.append((_offset + 5, _node_redis_error(_ts(_offset + 5))))
+    SCENARIO.append((_offset, "RedisCache", "ERROR", _redis_rejected(_ts(_offset), 47 + _offset // 60)))
+    SCENARIO.append((_offset + 5, "CartService", "ERROR", _node_redis_error(_ts(_offset + 5))))
 
 # T+35: Node.js unhandled rejections spike — Node.js agent fires
 for _offset in range(35 * 60, 45 * 60, 10):
-    SCENARIO.append((_offset, _node_unhandled_rejection(_ts(_offset))))
+    SCENARIO.append((_offset, "CartService", "ERROR", _node_unhandled_rejection(_ts(_offset))))
 
 # T+45 to T+60: latency spikes, continued degradation
 for _offset in range(45 * 60, 60 * 60, 20):
-    SCENARIO.append((_offset, _node_latency_spike(_ts(_offset))))
-    SCENARIO.append((_offset + 10, _redis_oom(_ts(_offset + 10))))
+    SCENARIO.append((_offset, "CartService", "WARN", _node_latency_spike(_ts(_offset))))
+    SCENARIO.append((_offset + 10, "RedisCache", "ERROR", _redis_oom(_ts(_offset + 10))))
 
 SCENARIO.sort(key=lambda x: x[0])
 
 
-def run(replay: bool = False) -> None:
-    """Emit log lines. In replay mode, no sleep — instant output for testing."""
-    print(f"[retailmax_redis_oom] Starting fault simulation. replay={replay}", flush=True)
+def run(replay: bool = False, endpoint: str = DEFAULT_ENDPOINT) -> None:
+    """Emit log lines and POST to ATLAS ingest endpoint."""
+    print(f"[retailmax_redis_oom] Starting fault simulation. replay={replay} endpoint={endpoint}", flush=True)
     base_time = time.monotonic()
 
-    for offset_seconds, lines in SCENARIO:
+    for offset_seconds, source, severity, lines in SCENARIO:
         if not replay:
             target = base_time + offset_seconds
             now = time.monotonic()
             if target > now:
                 time.sleep(target - now)
 
-        for line in lines:
-            print(line, flush=True)
+        _emit(endpoint, source, severity, lines)
 
     print("[retailmax_redis_oom] Scenario complete.", flush=True)
 
@@ -154,5 +189,6 @@ def run(replay: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RetailMax Redis OOM fault simulation")
     parser.add_argument("--replay", action="store_true", help="Instant output, no sleep")
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="ATLAS backend URL")
     args = parser.parse_args()
-    run(replay=args.replay)
+    run(replay=args.replay, endpoint=args.endpoint)

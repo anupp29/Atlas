@@ -158,7 +158,7 @@ async def _create_ticket(
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=float(os.environ.get("SERVICENOW_HTTP_TIMEOUT", str(_HTTP_TIMEOUT)))) as client:
                 resp = await client.post(
                     url,
                     json=payload,
@@ -198,7 +198,7 @@ async def _create_ticket(
             )
 
         if attempt < _MAX_RETRIES:
-            wait = _RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            wait = float(os.environ.get("SERVICENOW_RETRY_SLEEP", str(_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))))
             logger.info("n2_itsm.retry", attempt=attempt, wait_seconds=wait)
             await asyncio.sleep(wait)
 
