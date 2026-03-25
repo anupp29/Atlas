@@ -1,73 +1,69 @@
-# React + TypeScript + Vite
+# ui-atlas
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Standalone presentation UI for ATLAS. Pre-built demo screens that do not require a live backend connection. Use this for presentations where running the full backend stack is not practical.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What it is
 
-## React Compiler
+A React 19 + TypeScript application with a complete set of demo screens covering every stage of the ATLAS incident lifecycle. Each screen is a self-contained page with realistic data baked in. No backend connection required.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+This is not the operational dashboard. For the live dashboard that connects to the real backend, use `frontend/`.
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Pages
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+| Route | Page | What it shows |
+|-------|------|--------------|
+| `/` | Dashboard | Client roster, health status, activity feed |
+| `/detection` | DetectionPhase | Chronos-Bolt and SHAP detection in progress |
+| `/incidents` | IncidentIntelligence | Active incident list |
+| `/incidents/briefing` | IncidentBriefing | Full L2 six-section briefing card |
+| `/incidents/l1-command` | L1CommandInterface | L1 two-sentence summary and approve/escalate buttons |
+| `/incidents/approval` | ApprovalWorkflow | Dual cryptographic approval flow |
+| `/incidents/playbook` | PlaybookExecution | Playbook execution with live progress |
+| `/incidents/resolved` | PostResolution | MTTR counter, metric recovery chart, benchmark line |
+| `/incidents/veto` | VetoWarning | Veto fired screen with plain-English explanation |
+| `/network` | NetworkOverview | Neo4j knowledge graph visualisation |
+| `/finance` | FinanceCore | FinanceCore client deep-dive |
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+---
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Stack
+
+- React 19 + TypeScript
+- Tailwind CSS 4
+- React Router 7
+- Vite 8
+- Node.js 18 or 20 required
+
+---
+
+## Running
+
+```bash
+cd ui-atlas
+npm install
+npm run dev    # http://localhost:5174
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+To build for static hosting:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
+# Output in dist/
 ```
+
+---
+
+## Relationship to frontend/
+
+| | `frontend/` | `ui-atlas/` |
+|--|-------------|-------------|
+| React version | 18 | 19 |
+| Backend required | Yes (WebSocket) | No |
+| Data source | Live backend | Baked-in demo data |
+| Use case | Live operational demo | Presentation without backend |
+| Recharts / Force Graph | Yes | No |
+| React Router | No | Yes |
