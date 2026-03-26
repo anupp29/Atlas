@@ -22,32 +22,19 @@ DETECT -> CORRELATE -> DECIDE -> ACT -> LEARN
 
 ---
 
-## Repository layout
+## Architecture
 
-```
-Atlas/
-  backend/          FastAPI application, all Python logic
-    agents/         Specialist detection agents and detection models
-    config/         Client YAML configs and registry
-    database/       Neo4j, ChromaDB, and SQLite clients
-    execution/      Playbook library and approval tokens
-    ingestion/      Normaliser, CMDB enricher, event queue, adapters
-    learning/       Decision history, recalibration, weight correction, trust
-    llm/            Internal LLM reasoning server (runs as a separate process on port 8001)
-    orchestrator/   LangGraph pipeline, 7 nodes, confidence engine
-  data/
-    fallbacks/      Pre-computed LLM responses for demo reliability
-    fault_scripts/  Deterministic fault simulators for demo
-    seed/           Cypher and JSON seed data for Neo4j and ChromaDB
-    phase5_verify.py  Phase 5 integration verification script
-    phase7_verify.py  Phase 7 pre-demo hardening verification script
-  docs/             Architecture, plan, use cases, master spec
-  frontend/         React 18 dashboard (primary UI, connects to live backend)
-  ui-atlas/         React 19 presentation UI (standalone demo screens, no backend needed)
-  scripts/          Setup, validation, and demo utility scripts
-  test_progress.py  Full test suite
-  requirements.txt  All Python dependencies, pinned
-```
+<p align="center">
+  <img src="Images/flowchart.png" alt="ATLAS Architecture Flow" width="100%" />
+</p>
+
+---
+
+## Backend Engine
+
+<p align="center">
+  <img src="Images/backend engine.png" alt="Backend Engine Architecture" width="100%" />
+</p>
 
 ---
 
@@ -55,32 +42,47 @@ Atlas/
 
 | Step | What happens |
 |------|-------------|
-| **Detect** | Four specialist agents run a two-layer ensemble  Chronos-Bolt (time-series) + SHAP Isolation Forest (point anomaly)  with statistically calibrated confidence bands on every score |
+| **Detect** | Four specialist agents run a two-layer ensemble — Chronos-Bolt (time-series) + SHAP Isolation Forest (point anomaly) — with statistically calibrated confidence bands on every score |
 | **Correlate** | A 7-node LangGraph orchestrator queries Neo4j, ChromaDB, and ServiceNow CMDB to find root cause, including the exact deployment that triggered it |
-| **Decide** | A confidence engine routes to auto-resolution or human review. Seven hard vetoes ensure high-risk actions always reach a human |
+| **Decide** | A confidence engine routes to auto-resolution or human review. Eight hard vetoes ensure high-risk actions always reach a human |
 | **Act** | Named, versioned, pre-approved playbooks execute with a rollback path always ready. No ad-hoc commands. No LLM-generated scripts |
-| **Learn** | Every resolved incident and every human correction recalibrates the confidence model. The system earns autonomy through evidence  it cannot grant itself privileges |
+| **Learn** | Every resolved incident and every human correction recalibrates the confidence model. The system earns autonomy through evidence — it cannot grant itself privileges |
 
 ---
 
-## Repository Structure
+## User Interfaces
 
-```
-atlas/
-├── backend/            # FastAPI app — routes, WebSockets, agents, orchestrator, execution, learning
-│   ├── config/         # Per-client YAML configs and registry
-│   ├── ingestion/      # Normaliser, CMDB enricher, event queue, log adapters
-│   ├── agents/         # Specialist agents (Java, PostgreSQL, Node.js, Redis) + correlation engine
-│   ├── orchestrator/   # 7-node LangGraph pipeline + confidence scoring engine
-│   ├── execution/      # Playbook library + cryptographic approval tokens
-│   ├── learning/       # Decision history, recalibration, weight correction, trust progression
-│   └── database/       # Neo4j, ChromaDB, and SQLite clients
-├── frontend/           # React 18 dashboard
-├── data/               # Neo4j seed scripts, ChromaDB embeddings, fault injection, LLM fallbacks
-├── scripts/            # One-time setup: seed Neo4j, seed ChromaDB, validate similarity
-├── .env.example
-└── requirements.txt
-```
+### SDM — Service Delivery Manager
+
+<p align="center">
+  <img src="Images/Software manager.png" alt="SDM Dashboard" width="100%" />
+</p>
+
+### L1 Engineer — Triage
+
+<p align="center">
+  <img src="Images/L1 engineer.png" alt="L1 Triage Console" width="100%" />
+</p>
+
+### L2 Engineer — Investigation
+
+<p align="center">
+  <img src="Images/L2 engineer.png" alt="L2 Analysis Workspace" width="100%" />
+</p>
+
+### Client Portal
+
+<p align="center">
+  <img src="Images/Client.png" alt="Client Portal" width="100%" />
+</p>
+
+---
+
+## Landing Page
+
+<p align="center">
+  <img src="Images/Landing page.png" alt="ATLAS Landing Page" width="100%" />
+</p>
 
 ---
 
@@ -93,13 +95,28 @@ Chronos-Bolt detects gradual degradation; SHAP Isolation Forest catches sudden s
 Neo4j knowledge graph syncs from ServiceNow CMDB via webhook. Deployment correlation query runs in under 200ms. ChromaDB surfaces the closest historical incidents by cosine similarity.
 
 **Governed Automation**
-Seven hard vetoes cover: change freeze windows, PCI-DSS/SOX business hours, Class 3 actions, P1 severity, GDPR-sensitive data, repeat actions, and stale graph  none are overridable. Class 3 actions (database, network, production data) never auto-execute at any trust level, permanently. Dual cryptographic token sign-off enforced for all compliance-flagged approvals.
+Eight hard vetoes cover: change freeze windows, PCI-DSS/SOX business hours, Class 3 actions, P1 severity, GDPR-sensitive data, repeat actions, cold-start, and stale graph — none are overridable. Class 3 actions (database, network, production data) never auto-execute at any trust level, permanently. Dual cryptographic token sign-off enforced for all compliance-flagged approvals.
 
 **Evidence-Gated Trust**
 ATLAS advances through five trust stages only by accumulating confirmed correct resolutions. Nothing inside the system can change its own trust level. Each stage requires explicit human sign-off.
 
 **Permanent Institutional Knowledge**
-Every resolution writes a new Neo4j node, ChromaDB embedding, and Decision History record. New clients warm-start from anonymised embedding centroids of existing clients on the same tech stack  zero cold-start, zero data leakage.
+Every resolution writes a new Neo4j node, ChromaDB embedding, and Decision History record. New clients warm-start from anonymised embedding centroids of existing clients on the same tech stack — zero cold-start, zero data leakage.
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Backend | FastAPI, Python 3.11, asyncio |
+| Orchestration | LangGraph |
+| LLM | Cerebras Qwen3-235B → Ollama local fallback |
+| Detection | Chronos-Bolt, Isolation Forest, SHAP, Conformal Prediction |
+| Knowledge Graph | Neo4j Aura |
+| Vector Store | ChromaDB (namespaced per client) |
+| ITSM | ServiceNow Developer API |
+| Frontend | React 18 + Tailwind + Framer Motion |
 
 ---
 
@@ -109,6 +126,9 @@ Every resolution writes a new Neo4j node, ChromaDB embedding, and Decision Histo
 - Node.js 18+
 - Neo4j Aura Serverless account
 - ServiceNow Developer instance — free at [developer.servicenow.com](https://developer.servicenow.com)
+- Ollama (for local LLM fallback)
+
+---
 
 ## Setup
 
@@ -123,9 +143,47 @@ python scripts/seed_chromadb.py
 python scripts/validate_similarity.py    # must PASS before proceeding
 
 uvicorn backend.main:app --reload --port 8000
-cd frontend && npm install && npm run dev
+cd ui && npm install && npm run dev
 
 python data/fault_scripts/financecore_cascade.py   # trigger demo scenario
+```
+
+---
+
+## Key Metrics
+
+| Metric | Value |
+|--------|-------|
+| MTTR Benchmark | 43 minutes (Atlassian 2024) |
+| FinanceCore Auto-Execute Threshold | 0.92 |
+| RetailMax Auto-Execute Threshold | 0.82 |
+| Demo Confidence Score | 0.84 |
+| Historical Similarity Match | 0.91 |
+| Detection Confidence | 94% |
+
+---
+
+## Repository Structure
+
+```
+Atlas/
+├── backend/              # FastAPI application, all Python logic
+│   ├── agents/           # Specialist detection agents and detection models
+│   ├── config/           # Client YAML configs and registry
+│   ├── database/         # Neo4j, ChromaDB, and SQLite clients
+│   ├── execution/        # Playbook library and approval tokens
+│   ├── ingestion/        # Normaliser, CMDB enricher, event queue, adapters
+│   ├── learning/         # Decision history, recalibration, weight correction, trust
+│   ├── llm/              # LLM reasoning server (Cerebras + Ollama)
+│   └── orchestrator/     # LangGraph pipeline, 7 nodes, confidence engine
+├── data/
+│   ├── fallbacks/        # Pre-computed LLM responses for demo reliability
+│   ├── fault_scripts/    # Deterministic fault simulators for demo
+│   └── seed/             # Cypher and JSON seed data for Neo4j and ChromaDB
+├── docs/                 # Architecture, plan, use cases, master spec
+├── Images/               # Platform screenshots and diagrams
+├── ui/                   # React 18 dashboard
+└── scripts/              # Setup, validation, and demo utility scripts
 ```
 
 ---
