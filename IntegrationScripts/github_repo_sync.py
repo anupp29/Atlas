@@ -75,12 +75,12 @@ class GitHubRepoSyncDB:
                     pr_number INTEGER,
                     status TEXT NOT NULL,
                     error_message TEXT,
-                    created_at TEXT NOT NULL,
-                    INDEX idx_client_timestamp (client_id, timestamp),
-                    INDEX idx_status (status),
-                    INDEX idx_file_path (file_path)
+                    created_at TEXT NOT NULL
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_timestamp ON github_changes (client_id, timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON github_changes (status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_file_path ON github_changes (file_path)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS github_sync_stats (
                     stat_id TEXT PRIMARY KEY,

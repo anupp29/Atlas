@@ -87,12 +87,12 @@ class LogMonitorDB:
                     error_code TEXT,
                     raw_payload TEXT NOT NULL,
                     metadata TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    INDEX idx_client_timestamp (client_id, timestamp),
-                    INDEX idx_severity (severity),
-                    INDEX idx_source (source)
+                    created_at TEXT NOT NULL
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_timestamp ON monitored_logs (client_id, timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_severity ON monitored_logs (severity)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON monitored_logs (source)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS log_stats (
                     stat_id TEXT PRIMARY KEY,
