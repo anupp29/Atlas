@@ -10,7 +10,7 @@ import { AIReasoningPanel } from '@/components/atlas/AIReasoningPanel';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, Clock, ExternalLink, Shield, Brain, FileCode2, GitCommitHorizontal, Wrench, ArrowRight, Terminal, Bug, Code2, Database, Cpu, Activity, TrendingDown, Zap, ShieldCheck, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, Clock, ExternalLink, Shield, Brain, FileCode2, GitCommitHorizontal, Wrench, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Incident } from '@/types/atlas';
 import type { PipelineStage } from '@/components/atlas/PipelineIndicator';
@@ -40,21 +40,7 @@ function getEngineeringContext(incident: Incident) {
         before: 'maximumPoolSize: 100\nminimumIdle: 30\nconnectionTimeoutMs: 30000',
         after: 'maximumPoolSize: 50\nminimumIdle: 10\nconnectionTimeoutMs: 30000',
       },
-      stackTrace: `java.sql.SQLTransientConnectionException: HikariPool-1 - Connection is not available, request timed out after 30001ms.
-    at com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:695)
-    at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:197)
-    at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:162)
-    at com.atos.payment.service.PaymentProcessor.processTransaction(PaymentProcessor.java:89)
-    at com.atos.payment.controller.PaymentController.submitPayment(PaymentController.java:42)`,
       remediation: 'Revert pool size to a safe production value, redeploy the config package, and open a permanent problem record for capacity guardrails.',
-      metrics: {
-        activeConnections: 47,
-        maxConnections: 50,
-        waitingThreads: 23,
-        avgAcquireMs: 1820,
-        p99LatencyMs: 4200,
-        errorRate: 23,
-      },
     };
   }
 
@@ -76,20 +62,7 @@ function getEngineeringContext(incident: Incident) {
       before: 'cacheTarget: redis-product-catalog\nkeyNamespace: analytics_temp\nmaxDatasetMb: 512',
       after: 'cacheTarget: redis-product-catalog\nkeyNamespace: analytics\nmaxDatasetMb: 6200',
     },
-    stackTrace: `Error: Redis OOM command not allowed when used memory > 'maxmemory'.
-    at RedisClient.handleError (/services/product-catalog/src/cache/redisClient.ts:44:11)
-    at CacheManager.get (/services/product-catalog/src/cache/cacheManager.ts:28:9)
-    at ProductService.getProduct (/services/product-catalog/src/services/productService.ts:67:22)
-    at Router.handle (/services/product-catalog/node_modules/express/lib/router/index.js:174:12)`,
     remediation: 'Move analytics writes to a separate Redis target, flush analytics:* keys from the shared cluster, and enforce namespace isolation in deployment validation.',
-    metrics: {
-      activeConnections: 0,
-      maxConnections: 0,
-      waitingThreads: 0,
-      avgAcquireMs: 0,
-      p99LatencyMs: 2800,
-      errorRate: 12,
-    },
   };
 }
 
@@ -125,30 +98,42 @@ export function IncidentBriefing({ incident }: Props) {
 
   useEffect(() => {
     if (isExecuting || isResolved || isEscalated || isRejected) return;
+
     const stages: PipelineStage[] = ['ingest', 'detect', 'correlate', 'search', 'reason', 'select', 'route'];
     setPipelineStage('ingest');
+
     const timers = stages.map((stage, index) =>
       window.setTimeout(() => setPipelineStage(stage), index * 450)
     );
+
     return () => timers.forEach(window.clearTimeout);
   }, [incident.id, role, isExecuting, isResolved, isEscalated, isRejected]);
 
   const handleApproveClick = () => setShowConfirmation(true);
+
   const handleConfirmApprove = useCallback(() => {
     setShowConfirmation(false);
     setIsExecuting(true);
     setPipelineStage('act');
   }, []);
+
   const handleExecutionComplete = useCallback(() => {
     setPipelineStage('learn');
     setTimeout(() => setIsResolved(true), 800);
   }, []);
-  const handleEscalate = () => { setIsEscalated(true); setShowEscalate(false); };
-  const handleReject = () => { setIsRejected(true); setShowReject(false); };
+
+  const handleEscalate = () => {
+    setIsEscalated(true);
+    setShowEscalate(false);
+  };
+
+  const handleReject = () => {
+    setIsRejected(true);
+    setShowReject(false);
+  };
 
   const confidenceLabel = incident.rootCause.confidence >= 85 ? 'High' : incident.rootCause.confidence >= 70 ? 'Medium' : 'Low';
 
-  // ─── RESOLVED STATE ───
   if (isResolved) {
     return (
       <div className="space-y-4 max-w-5xl">
@@ -160,12 +145,25 @@ export function IncidentBriefing({ incident }: Props) {
             <span className="font-mono text-[11px] text-muted-foreground">{incident.id}</span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div><p className="text-[10px] text-muted-foreground uppercase tracking-wider">Client</p><p className="text-[13px] font-medium text-foreground mt-0.5">{incident.clientName}</p></div>
-            <div><p className="text-[10px] text-muted-foreground uppercase tracking-wider">MTTR</p><p className="text-[13px] font-semibold text-status-healthy mt-0.5">4m 12s</p></div>
-            <div><p className="text-[10px] text-muted-foreground uppercase tracking-wider">Playbook</p><p className="font-mono text-[11px] text-foreground mt-0.5">{incident.recommendedAction.playbookName}</p></div>
-            <div><p className="text-[10px] text-muted-foreground uppercase tracking-wider">Approved by</p><p className="text-[13px] text-foreground mt-0.5">{user?.name}</p></div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Client</p>
+              <p className="text-[13px] font-medium text-foreground mt-0.5">{incident.clientName}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">MTTR</p>
+              <p className="text-[13px] font-semibold text-status-healthy mt-0.5">4m 12s</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Playbook</p>
+              <p className="font-mono text-[11px] text-foreground mt-0.5">{incident.recommendedAction.playbookName}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Approved by</p>
+              <p className="text-[13px] text-foreground mt-0.5">{user?.name}</p>
+            </div>
           </div>
         </div>
+
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
           <div className="flex items-center justify-between">
             <div>
@@ -182,7 +180,6 @@ export function IncidentBriefing({ incident }: Props) {
     );
   }
 
-  // ─── ESCALATED STATE ───
   if (isEscalated) {
     const nextLevel = isL1 ? 'L2' : 'L3';
     return (
@@ -203,7 +200,6 @@ export function IncidentBriefing({ incident }: Props) {
     );
   }
 
-  // ─── REJECTED STATE (L3) ───
   if (isRejected) {
     return (
       <div className="space-y-4 max-w-5xl">
@@ -214,164 +210,167 @@ export function IncidentBriefing({ incident }: Props) {
             <span className="text-[15px] font-semibold text-foreground">L3 Manual Resolution</span>
             <span className="font-mono text-[11px] text-muted-foreground">{incident.id}</span>
           </div>
-          <p className="text-[13px] text-muted-foreground">AI recommendation rejected. L3 engineering diagnosis has taken ownership.</p>
+          <p className="text-[13px] text-muted-foreground">AI recommendation rejected. L3 engineering diagnosis has taken ownership of the incident.</p>
           <div className="bg-muted/30 rounded p-3 mt-3">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">L3 diagnosis</p>
             <p className="text-[12px] text-foreground leading-relaxed">{rejectReason}</p>
           </div>
           <div className="mt-3 flex items-center gap-2">
-            <Button className="bg-status-healthy hover:bg-status-healthy/90 text-white text-[12px] h-8" onClick={() => setIsResolved(true)}>Mark Resolved</Button>
-            <span className="text-[10px] text-muted-foreground">Stored as 3× weight training data.</span>
+            <Button className="bg-status-healthy hover:bg-status-healthy/90 text-white text-[12px] h-8" onClick={() => setIsResolved(true)}>
+              Mark Resolved
+            </Button>
+            <span className="text-[10px] text-muted-foreground">Stored as high-weight training data.</span>
           </div>
         </div>
       </div>
     );
   }
 
-  // ════════════════════════════════════════════════
-  //  L1 — TRIAGE CONSOLE (Compact, Decision-focused)
-  // ════════════════════════════════════════════════
   if (isL1) {
     return (
-      <div className="space-y-4 max-w-3xl">
+      <div className="space-y-4 max-w-4xl">
         <PipelineIndicator currentStage={pipelineStage} compact />
 
-        {/* Header strip */}
-        <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-          <div className="px-4 py-3 bg-accent/[0.04] border-b border-border flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-accent" />
-              <span className="text-[11px] font-semibold text-accent uppercase tracking-wider">L1 Triage Console</span>
+        <div className="bg-card border border-border rounded-lg p-5 shadow-atlas">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="px-2 py-1 rounded bg-accent/10 text-accent text-[10px] font-semibold uppercase tracking-wider">L1 triage console</span>
+                <span className="font-mono text-[11px] text-muted-foreground">{incident.id}</span>
+                <PriorityBadge priority={incident.priority} />
+              </div>
+              <h2 className="text-[15px] font-semibold text-foreground">{incident.clientName}</h2>
+              <p className="text-[12px] text-muted-foreground mt-1">First-line operator view — approve or escalate.</p>
             </div>
-            <div className="flex items-center gap-2">
-              <PriorityBadge priority={incident.priority} />
-              <CountdownTimer deadline={incident.slaDeadline} className="text-[13px] font-mono" />
+            <div className="text-right">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">SLA remaining</p>
+              <CountdownTimer deadline={incident.slaDeadline} className="text-[14px] font-mono" />
             </div>
           </div>
-          <div className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="font-mono text-[11px] text-muted-foreground">{incident.id}</span>
-              <span className="text-[10px] text-muted-foreground">·</span>
-              <span className="text-[13px] font-semibold text-foreground">{incident.clientName}</span>
-              {needsDualApproval && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning">{client?.complianceFlags?.join(' · ')}</span>}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="md:col-span-2 border border-border rounded-lg p-4 bg-muted/20">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Situation summary</p>
+              <p className="text-[13px] text-foreground leading-relaxed">{incident.summary}</p>
             </div>
-            <p className="text-[13px] text-foreground leading-relaxed">{incident.summary}</p>
+            <div className="border border-border rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Decision signal</p>
+              <p className={cn('text-[16px] font-semibold', confidenceLabel === 'High' ? 'text-status-healthy' : confidenceLabel === 'Medium' ? 'text-status-warning' : 'text-status-critical')}>
+                {confidenceLabel}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1">ATLAS confidence for first-line approval</p>
+            </div>
           </div>
         </div>
 
-        {/* Quick decision signals — 3 cards */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">AI Confidence</p>
-            <p className={cn('text-[22px] font-bold leading-none', confidenceLabel === 'High' ? 'text-status-healthy' : confidenceLabel === 'Medium' ? 'text-status-warning' : 'text-status-critical')}>
-              {confidenceLabel}
-            </p>
-            <p className="text-[10px] text-muted-foreground mt-1">for first-line approval</p>
-          </div>
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Risk Level</p>
-            <p className="text-[22px] font-bold text-foreground leading-none">{incident.recommendedAction.riskClass}</p>
-            <p className="text-[10px] text-muted-foreground mt-1">{incident.recommendedAction.rollbackAvailable ? 'Rollback available' : 'Manual rollback'}</p>
-          </div>
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Est. Resolution</p>
-            <p className="text-[22px] font-bold text-foreground leading-none">{incident.recommendedAction.estimatedTime.replace(' minutes', 'm')}</p>
-            <p className="text-[10px] text-muted-foreground mt-1">automated playbook</p>
-          </div>
-        </div>
-
-        {/* Operator checklist */}
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
-          <h3 className="text-[11px] font-semibold text-foreground mb-3 uppercase tracking-wider flex items-center gap-2">
-            <Activity className="h-3.5 w-3.5 text-accent" /> Pre-approval checklist
-          </h3>
-          <div className="space-y-2">
+          <h3 className="text-[12px] font-semibold text-foreground mb-3 uppercase tracking-wider">Operator checklist</h3>
+          <div className="space-y-2.5">
             {[
-              { label: 'Primary service impact', value: `${incident.affectedServices[0]} — ${incident.services[0]?.triggerValue || 'degraded'}`, ok: true },
-              { label: 'Deployment correlation', value: incident.deploymentCorrelation ? `${incident.deploymentCorrelation.changeId} (${incident.deploymentCorrelation.daysAgo}d ago)` : 'No recent change detected', ok: !!incident.deploymentCorrelation },
-              { label: 'Historical precedent', value: incident.historicalMatch ? `${incident.historicalMatch.similarity}% match — resolved before` : 'Novel pattern', ok: !!incident.historicalMatch },
-              { label: 'Business impact', value: incident.businessImpact, ok: false },
-            ].map((item, i) => (
-              <div key={i} className="flex items-start gap-3 rounded-lg border border-border p-3">
-                <div className={cn('h-5 w-5 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold', item.ok ? 'bg-status-healthy/10 text-status-healthy' : 'bg-muted text-muted-foreground')}>
-                  {i + 1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">{item.label}</p>
-                  <p className="text-[12px] text-foreground mt-0.5 leading-relaxed">{item.value}</p>
-                </div>
+              `Primary impact confirmed on ${incident.affectedServices[0]}`,
+              incident.deploymentCorrelation ? `Recent change detected: ${incident.deploymentCorrelation.changeId}` : 'No recent deployment detected',
+              `Recommended action is ${incident.recommendedAction.riskClass.toLowerCase()} risk with ${incident.recommendedAction.rollbackAvailable ? 'rollback available' : 'manual rollback'}`,
+              `Business impact: ${incident.businessImpact}`,
+            ].map((item, index) => (
+              <div key={item} className="flex items-start gap-3 border border-border rounded-lg p-3">
+                <div className="h-5 w-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-semibold shrink-0">{index + 1}</div>
+                <p className="text-[12px] text-foreground leading-relaxed">{item}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Service health - compact */}
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
-          <h3 className="text-[11px] font-semibold text-foreground mb-2 uppercase tracking-wider">Affected services</h3>
-          <div className="flex flex-wrap gap-2">
-            {incident.services.slice(0, 4).map(s => (
-              <div key={s.id} className="flex items-center gap-2 border border-border rounded-md px-3 py-2">
-                <StatusIndicator status={s.health} />
-                <span className="text-[12px] font-medium text-foreground">{s.name}</span>
-                <span className="text-[10px] text-muted-foreground">{s.technology}</span>
+          <h3 className="text-[12px] font-semibold text-foreground mb-3 uppercase tracking-wider">Service health snapshot</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {incident.services.slice(0, 4).map((service) => (
+              <div key={service.id} className="border border-border rounded-md p-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <StatusIndicator status={service.health} />
+                    <span className="text-[12px] font-medium text-foreground">{service.name}</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">{service.technology}</p>
+                </div>
+                <p className="text-[10px] font-mono text-foreground text-right max-w-[140px]">{service.triggerValue}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Action area */}
+        {incident.deploymentCorrelation && (
+          <div className="bg-card border border-border rounded-lg p-4 shadow-atlas border-l-[3px] border-l-status-warning">
+            <h3 className="text-[12px] font-semibold text-foreground mb-1.5 uppercase tracking-wider">What changed</h3>
+            <p className="text-[12px] text-foreground leading-relaxed">{incident.deploymentCorrelation.description}</p>
+            <p className="text-[10px] text-muted-foreground mt-2">{incident.deploymentCorrelation.changeId} · deployed by {incident.deploymentCorrelation.deployedBy} · {incident.deploymentCorrelation.daysAgo} day(s) ago</p>
+          </div>
+        )}
+
         {isExecuting ? (
           <ExecutionTrace playbookName={incident.recommendedAction.playbookName} onComplete={handleExecutionComplete} />
         ) : (
           <div className="bg-card border border-border rounded-lg p-5 shadow-atlas border-l-4 border-l-accent">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-start justify-between gap-4 mb-3">
               <div>
                 <h3 className="text-[14px] font-semibold text-foreground">Recommended action</h3>
-                <p className="font-mono text-[11px] text-accent mt-0.5">{incident.recommendedAction.playbookName}</p>
+                <p className="font-mono text-[11px] text-accent mt-1">{incident.recommendedAction.playbookName}</p>
+              </div>
+              <div className="text-right text-[10px] text-muted-foreground">
+                <p>Est. {incident.recommendedAction.estimatedTime}</p>
+                <p className="mt-1">Risk: {incident.recommendedAction.riskClass}</p>
               </div>
             </div>
             <p className="text-[12px] text-foreground leading-relaxed mb-4">{incident.recommendedAction.description}</p>
 
-            <div className="flex items-center gap-3">
-              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-8 h-11 text-[14px] font-semibold shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">
                 {needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}
               </Button>
-              <Button variant="ghost" className="text-muted-foreground text-[12px] h-9" onClick={() => setShowEscalate(!showEscalate)}>
+              <Button variant="ghost" className="text-muted-foreground text-[12px]" onClick={() => setShowEscalate(!showEscalate)}>
                 Escalate to L2
               </Button>
             </div>
 
             {showEscalate && (
               <div className="mt-4 pt-3 border-t border-border space-y-2.5">
-                <p className="text-[11px] font-medium text-foreground">Why does this need deeper investigation?</p>
-                <Textarea placeholder="Brief reason for escalation..." value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
-                <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!escalateReason.trim()} onClick={handleEscalate}>Confirm escalation</Button>
+                <p className="text-[11px] font-medium text-foreground">Escalation to L2</p>
+                <Textarea placeholder="Why does this need deeper investigation?" value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
+                <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!escalateReason.trim()} onClick={handleEscalate}>
+                  Confirm escalation
+                </Button>
               </div>
             )}
           </div>
         )}
 
-        <ConfirmationDialog open={showConfirmation} onConfirm={handleConfirmApprove} onCancel={() => setShowConfirmation(false)} playbookName={incident.recommendedAction.playbookName} description={incident.recommendedAction.description} affectedService={incident.affectedServices[0]} />
+        <ConfirmationDialog
+          open={showConfirmation}
+          onConfirm={handleConfirmApprove}
+          onCancel={() => setShowConfirmation(false)}
+          playbookName={incident.recommendedAction.playbookName}
+          description={incident.recommendedAction.description}
+          affectedService={incident.affectedServices[0]}
+        />
       </div>
     );
   }
 
-  // ════════════════════════════════════════════════
-  //  L2 — ANALYSIS WORKSPACE (Full 8-section briefing)
-  // ════════════════════════════════════════════════
-  const l2AnalysisView = (
+  const analysisStack = (
     <div className="space-y-4">
       <PipelineIndicator currentStage={pipelineStage} />
 
-      {/* Section 1: Situation Header */}
       <div className="bg-card border border-border rounded-lg p-5 shadow-atlas">
         <div className="flex items-center justify-between mb-3 gap-4">
           <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="px-2 py-1 rounded bg-accent/10 text-accent text-[10px] font-semibold uppercase tracking-wider">L2 Analysis Workspace</span>
+            <span className={cn('px-2 py-1 rounded text-[10px] font-semibold uppercase tracking-wider', isL2 ? 'bg-accent/10 text-accent' : 'bg-primary text-primary-foreground')}>
+              {isL2 ? 'L2 analysis workspace' : 'L3 engineering workspace'}
+            </span>
             <span className="font-mono text-[11px] text-muted-foreground">{incident.id}</span>
             <span className="text-[13px] font-medium text-foreground">{incident.clientName}</span>
             <PriorityBadge priority={incident.priority} />
-            {needsDualApproval && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning uppercase">{client?.complianceFlags?.join(' · ')}</span>}
+            {needsDualApproval && (
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning uppercase">{client?.complianceFlags?.join(' · ')}</span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <Clock className="h-3 w-3 text-muted-foreground" />
@@ -385,14 +384,12 @@ export function IncidentBriefing({ incident }: Props) {
         </div>
       </div>
 
-      {/* Section 2: AI Reasoning (expandable) */}
       <AIReasoningPanel incident={incident} showFullDetail />
 
-      {/* Section 3: Service Health Snapshot */}
       <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
         <h3 className="text-[12px] font-semibold text-foreground mb-3 uppercase tracking-wider">Service health snapshot</h3>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-          {incident.services.map(service => (
+          {incident.services.map((service) => (
             <div key={service.id} className={cn('border rounded-md p-3', service.health === 'critical' ? 'border-status-critical/30 bg-destructive/[0.02]' : service.health === 'warning' ? 'border-status-warning/25 bg-status-warning/[0.02]' : 'border-border')}>
               <div className="flex items-center gap-1.5 mb-1"><StatusIndicator status={service.health} /><span className="text-[12px] font-medium text-foreground">{service.name}</span></div>
               <p className="text-[10px] text-muted-foreground">{service.technology}</p>
@@ -403,7 +400,6 @@ export function IncidentBriefing({ incident }: Props) {
         </div>
       </div>
 
-      {/* Section 4: What Changed */}
       {incident.deploymentCorrelation && (
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas border-l-[3px] border-l-status-warning">
           <h3 className="text-[12px] font-semibold text-foreground mb-1.5 uppercase tracking-wider">What changed</h3>
@@ -413,7 +409,6 @@ export function IncidentBriefing({ incident }: Props) {
         </div>
       )}
 
-      {/* Section 5: Dependency Graph */}
       <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
         <h3 className="text-[12px] font-semibold text-foreground mb-3 uppercase tracking-wider">Dependency graph</h3>
         <div className="h-[220px] border border-border rounded bg-muted/5 relative overflow-hidden">
@@ -438,10 +433,9 @@ export function IncidentBriefing({ incident }: Props) {
             })}
           </svg>
         </div>
-        <p className="text-[9px] text-muted-foreground mt-2">Causal path highlighted in blue. Deployment change shown as diamond node.</p>
+        <p className="text-[9px] text-muted-foreground mt-2">Causal path highlighted in blue. Deployment change is shown as a diamond node.</p>
       </div>
 
-      {/* Section 6: Historical Match */}
       <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
         <h3 className="text-[12px] font-semibold text-foreground mb-2 uppercase tracking-wider">Historical match</h3>
         {incident.historicalMatch ? (
@@ -456,11 +450,10 @@ export function IncidentBriefing({ incident }: Props) {
             <button className="flex items-center gap-1 text-[11px] text-accent hover:underline mt-2"><ExternalLink className="h-3 w-3" /> View full record</button>
           </>
         ) : (
-          <p className="text-[12px] text-muted-foreground">No strong historical precedent found — pattern flagged as novel.</p>
+          <p className="text-[12px] text-muted-foreground">No strong historical precedent found.</p>
         )}
       </div>
 
-      {/* Section 7: Root Cause Assessment */}
       <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
         <h3 className="text-[12px] font-semibold text-foreground mb-2 uppercase tracking-wider">Root cause assessment</h3>
         <p className="text-[12px] text-foreground mb-3 leading-relaxed">{incident.rootCause.diagnosis}</p>
@@ -485,7 +478,6 @@ export function IncidentBriefing({ incident }: Props) {
         )}
       </div>
 
-      {/* Section 8: Alternative Hypotheses */}
       {incident.alternativeHypotheses.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
           <button onClick={() => setShowAlternatives(!showAlternatives)} className="flex items-center gap-2 text-[12px] font-semibold text-foreground w-full text-left">
@@ -507,8 +499,7 @@ export function IncidentBriefing({ incident }: Props) {
         </div>
       )}
 
-      {/* Recommended Action + Buttons */}
-      {isExecuting ? (
+      {(isExecuting ? (
         <ExecutionTrace playbookName={incident.recommendedAction.playbookName} onComplete={handleExecutionComplete} />
       ) : (
         <div className="bg-card border border-border rounded-lg p-5 shadow-atlas border-l-4 border-l-accent">
@@ -522,7 +513,7 @@ export function IncidentBriefing({ incident }: Props) {
           </div>
           {!isSDM && (
             <div className="flex items-center gap-2.5 flex-wrap">
-              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-8 h-11 text-[14px] font-semibold shadow-sm">{needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}</Button>
+              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">{needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}</Button>
               <Button variant="outline" className="h-9 text-[12px]" onClick={() => { setShowModify(!showModify); setShowEscalate(false); setShowReject(false); }}>Modify</Button>
               {isL2 && <Button variant="ghost" className="text-muted-foreground text-[12px]" onClick={() => { setShowEscalate(!showEscalate); setShowModify(false); }}>Escalate to L3</Button>}
               {isL3 && <Button variant="ghost" className="text-status-critical text-[12px]" onClick={() => { setShowReject(!showReject); setShowModify(false); }}>Reject</Button>}
@@ -531,170 +522,129 @@ export function IncidentBriefing({ incident }: Props) {
           {showEscalate && (
             <div className="mt-4 pt-3 border-t border-border space-y-2.5">
               <p className="text-[11px] font-medium text-foreground">Escalation to L3</p>
-              <Textarea placeholder="Reason for escalation..." value={escalateReason} onChange={e => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
+              <Textarea placeholder="Reason for escalation..." value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
               <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!escalateReason.trim()} onClick={handleEscalate}>Confirm escalation</Button>
             </div>
           )}
           {showModify && (
             <div className="mt-4 pt-3 border-t border-border space-y-2.5">
               <p className="text-[11px] font-medium text-foreground">Modify playbook parameters</p>
-              <div className="flex items-center gap-2.5"><label className="text-[11px] text-muted-foreground shrink-0">maxPoolSize</label><Input value={modifyValue} onChange={e => setModifyValue(e.target.value)} className="w-20 h-8 text-[12px] font-mono" /><span className="text-[10px] text-muted-foreground">AI recommended 150 → you: {modifyValue}</span></div>
-              <Textarea placeholder="Reason for modification..." value={modifyReason} onChange={e => setModifyReason(e.target.value)} className="h-14 text-[12px]" />
+              <div className="flex items-center gap-2.5"><label className="text-[11px] text-muted-foreground shrink-0">maxPoolSize</label><Input value={modifyValue} onChange={(e) => setModifyValue(e.target.value)} className="w-20 h-8 text-[12px] font-mono" /><span className="text-[10px] text-muted-foreground">AI recommended 150 → you: {modifyValue}</span></div>
+              <Textarea placeholder="Reason for modification..." value={modifyReason} onChange={(e) => setModifyReason(e.target.value)} className="h-14 text-[12px]" />
               <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!modifyReason.trim()} onClick={handleApproveClick}>Confirm modified approval</Button>
             </div>
           )}
           {showReject && (
             <div className="mt-4 pt-3 border-t border-border space-y-2.5">
               <p className="text-[11px] font-medium text-foreground">Reject AI recommendation</p>
-              <p className="text-[10px] text-muted-foreground">State the real root cause and intended engineering fix. This becomes 3× weight training data.</p>
-              <Textarea placeholder="Explain the correct diagnosis and intended resolution approach..." value={rejectReason} onChange={e => setRejectReason(e.target.value)} className="h-24 text-[12px]" />
+              <p className="text-[10px] text-muted-foreground">State the real root cause and intended engineering fix.</p>
+              <Textarea placeholder="Explain the correct diagnosis and intended resolution approach..." value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} className="h-24 text-[12px]" />
               <Button className="bg-status-critical hover:bg-status-critical/90 text-destructive-foreground text-[12px] h-8" disabled={!rejectReason.trim()} onClick={handleReject}>Confirm rejection</Button>
             </div>
           )}
         </div>
-      )}
+      ))}
 
-      {/* Raw evidence (collapsed) */}
-      <div className="bg-card border border-border rounded-lg shadow-atlas">
-        <button onClick={() => setShowRawEvidence(!showRawEvidence)} className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-muted/20 transition-colors">
-          {showRawEvidence ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
-          <span className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Raw evidence</span>
-          <span className="text-[10px] text-muted-foreground">— metric snapshots & log excerpts</span>
-        </button>
-        {showRawEvidence && (
-          <div className="px-4 pb-4 border-t border-border pt-3">
-            <div className="bg-muted/30 rounded p-3 font-mono text-[10px] text-muted-foreground space-y-1 max-h-[200px] overflow-auto">
-              <p>[{new Date(incident.detectedAt).toISOString()}] ANOMALY_DETECTED service={incident.services[0]?.name} metric={incident.services[0]?.triggerMetric} value={incident.services[0]?.triggerValue}</p>
-              {incident.services.slice(1).map((s, i) => <p key={i}>[{new Date(new Date(incident.detectedAt).getTime() + (i + 1) * 2000).toISOString()}] CASCADE_CHECK service={s.name} health={s.health}</p>)}
-              {incident.deploymentCorrelation && <p>[CORRELATION] change_id={incident.deploymentCorrelation.changeId} deployed_by={incident.deploymentCorrelation.deployedBy}</p>}
-              <p>[DECISION] playbook={incident.recommendedAction.playbookName} confidence={incident.rootCause.confidence}%</p>
+      {(isL2 || isL3) && (
+        <div className="bg-card border border-border rounded-lg shadow-atlas">
+          <button onClick={() => setShowRawEvidence(!showRawEvidence)} className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-muted/20 transition-colors">
+            {showRawEvidence ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            <span className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Raw evidence</span>
+            <span className="text-[10px] text-muted-foreground">— metric snapshots & log excerpts</span>
+          </button>
+          {showRawEvidence && (
+            <div className="px-4 pb-4 border-t border-border pt-3">
+              <div className="bg-muted/30 rounded p-3 font-mono text-[10px] text-muted-foreground space-y-1 max-h-[200px] overflow-auto">
+                <p>[{new Date(incident.detectedAt).toISOString()}] ANOMALY_DETECTED service={incident.services[0]?.name} metric={incident.services[0]?.triggerMetric} value={incident.services[0]?.triggerValue}</p>
+                {incident.services.slice(1).map((s, i) => <p key={i}>[{new Date(new Date(incident.detectedAt).getTime() + (i + 1) * 2000).toISOString()}] CASCADE_CHECK service={s.name} health={s.health} metric={s.triggerMetric || 'N/A'} value={s.triggerValue || 'normal'}</p>)}
+                {incident.deploymentCorrelation && <p>[CORRELATION] change_id={incident.deploymentCorrelation.changeId} deployed_by={incident.deploymentCorrelation.deployedBy} days_ago={incident.deploymentCorrelation.daysAgo} cab_risk={incident.deploymentCorrelation.cabRiskRating}</p>}
+                {incident.historicalMatch && <p>[KB_MATCH] incident={incident.historicalMatch.incidentId} similarity={incident.historicalMatch.similarity}% date={incident.historicalMatch.occurredAt}</p>}
+                <p>[DECISION] playbook={incident.recommendedAction.playbookName} confidence={incident.rootCause.confidence}% risk={incident.recommendedAction.riskClass}</p>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 
-  // ════════════════════════════════════════════════
-  //  L3 — ENGINEERING DEBUG WORKSPACE (Split layout)
-  // ════════════════════════════════════════════════
-  if (isL3) {
-    return (
-      <div className="grid gap-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
-        {/* Left: Analysis stack (same as L2) */}
-        {l2AnalysisView}
-
-        {/* Right: Engineering sidebar */}
-        <aside className="space-y-4 lg:sticky lg:top-6 self-start">
-          {/* Fault identification */}
-          <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-            <div className="px-4 py-3 bg-status-critical/[0.04] border-b border-border flex items-center gap-2">
-              <Bug className="h-4 w-4 text-status-critical" />
-              <span className="text-[11px] font-semibold text-status-critical uppercase tracking-wider">Engineering Fault</span>
-            </div>
-            <div className="p-4 space-y-3">
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Identified issue</p>
-                <p className="text-[12px] font-medium text-foreground">{engineeringContext.title}</p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Severity classification</p>
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-status-critical/20 bg-status-critical/5 text-[10px] text-status-critical font-medium">
-                  <AlertTriangle className="h-3 w-3" /> {engineeringContext.severity}
-                </span>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Remediation</p>
-                <p className="text-[11px] text-foreground leading-relaxed">{engineeringContext.remediation}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Suspected files */}
-          <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Code2 className="h-4 w-4 text-accent" />
-              <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Suspected files</span>
-            </div>
-            <div className="p-3 space-y-1.5">
-              {engineeringContext.files.map(file => (
-                <div key={file} className="px-3 py-2 border border-border rounded bg-muted/20">
-                  <p className="font-mono text-[10px] text-foreground break-all">{file}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Config diff */}
-          <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-            <button onClick={() => setShowConfigDiff(!showConfigDiff)} className="w-full px-4 py-3 border-b border-border flex items-center justify-between hover:bg-muted/20 transition-colors">
-              <div className="flex items-center gap-2">
-                <GitCommitHorizontal className="h-4 w-4 text-status-warning" />
-                <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Config diff</span>
-              </div>
-              {showConfigDiff ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-            </button>
-            {showConfigDiff && (
-              <div className="p-3 space-y-2">
-                <div className="border border-status-healthy/20 rounded overflow-hidden">
-                  <div className="px-3 py-1.5 bg-status-healthy/5 border-b border-status-healthy/10 text-[9px] font-semibold text-status-healthy uppercase tracking-wider">Previous (known-good)</div>
-                  <pre className="p-3 text-[10px] font-mono text-foreground whitespace-pre-wrap bg-muted/10">{engineeringContext.diff.before}</pre>
-                </div>
-                <div className="border border-status-critical/20 rounded overflow-hidden">
-                  <div className="px-3 py-1.5 bg-status-critical/5 border-b border-status-critical/10 text-[9px] font-semibold text-status-critical uppercase tracking-wider">Current (suspect)</div>
-                  <pre className="p-3 text-[10px] font-mono text-foreground whitespace-pre-wrap bg-muted/10">{engineeringContext.diff.after}</pre>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Stack trace */}
-          <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Stack trace</span>
-            </div>
-            <div className="p-3">
-              <pre className="p-3 bg-primary text-primary-foreground rounded font-mono text-[9px] leading-relaxed whitespace-pre-wrap overflow-auto max-h-[240px]">{engineeringContext.stackTrace}</pre>
-            </div>
-          </div>
-
-          {/* Runtime metrics */}
-          <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Runtime metrics</span>
-            </div>
-            <div className="p-3 grid grid-cols-2 gap-2">
-              {[
-                { label: 'p99 Latency', value: `${engineeringContext.metrics.p99LatencyMs}ms`, warn: engineeringContext.metrics.p99LatencyMs > 1000 },
-                { label: 'Error Rate', value: `${engineeringContext.metrics.errorRate}%`, warn: engineeringContext.metrics.errorRate > 5 },
-                ...(engineeringContext.metrics.activeConnections > 0 ? [
-                  { label: 'Active Conn', value: `${engineeringContext.metrics.activeConnections}/${engineeringContext.metrics.maxConnections}`, warn: true },
-                  { label: 'Waiting', value: `${engineeringContext.metrics.waitingThreads} threads`, warn: engineeringContext.metrics.waitingThreads > 10 },
-                ] : []),
-              ].map((m, i) => (
-                <div key={i} className="border border-border rounded p-2 text-center">
-                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">{m.label}</p>
-                  <p className={cn('text-[14px] font-mono font-bold tabular-nums mt-0.5', m.warn ? 'text-status-critical' : 'text-foreground')}>{m.value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
-
-        <ConfirmationDialog open={showConfirmation} onConfirm={handleConfirmApprove} onCancel={() => setShowConfirmation(false)} playbookName={incident.recommendedAction.playbookName} description={incident.recommendedAction.description} affectedService={incident.affectedServices[0]} />
+  const l3Sidebar = isL3 ? (
+    <aside className="space-y-4 lg:sticky lg:top-6 self-start">
+      <div className="bg-card border border-border rounded-lg p-4 shadow-atlas border-l-[3px] border-l-status-critical">
+        <div className="flex items-center gap-2 mb-3">
+          <FileCode2 className="h-4 w-4 text-status-critical" />
+          <h3 className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Code / config fault</h3>
+        </div>
+        <p className="text-[12px] text-foreground leading-relaxed">{engineeringContext.issue}</p>
+        <div className="mt-3 inline-flex items-center gap-2 px-2.5 py-1.5 rounded border border-status-critical/20 bg-status-critical/5 text-[10px] text-status-critical font-medium">
+          <AlertTriangle className="h-3 w-3" /> {engineeringContext.severity}
+        </div>
       </div>
-    );
-  }
 
-  // ════════════════════════════════════════════════
-  //  L2 / SDM — Standard analysis view
-  // ════════════════════════════════════════════════
+      <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+        <div className="flex items-center gap-2 mb-3">
+          <GitCommitHorizontal className="h-4 w-4 text-accent" />
+          <h3 className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Engineering investigation</h3>
+        </div>
+        <div className="space-y-2">
+          {engineeringContext.files.map((file) => (
+            <div key={file} className="border border-border rounded-md px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Suspected file</p>
+              <p className="font-mono text-[11px] text-foreground mt-1 break-all">{file}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          <Button variant="outline" className="justify-between text-[12px]" onClick={() => setShowConfigDiff(!showConfigDiff)}>
+            Open suspected config diff <ArrowRight className="h-3 w-3" />
+          </Button>
+          <Button variant="outline" className="justify-between text-[12px]" onClick={() => setShowRawEvidence(true)}>
+            Open runtime evidence <ArrowRight className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+        <div className="flex items-center gap-2 mb-3">
+          <Wrench className="h-4 w-4 text-accent" />
+          <h3 className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Failure signature</h3>
+        </div>
+        <div className="bg-muted/30 rounded-lg p-3 font-mono text-[10px] text-muted-foreground space-y-1.5">
+          {engineeringContext.signature.map((line) => <p key={line}>{line}</p>)}
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-3">{engineeringContext.remediation}</p>
+      </div>
+
+      {showConfigDiff && (
+        <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+          <h3 className="text-[12px] font-semibold text-foreground uppercase tracking-wider mb-3">Suspected config diff</h3>
+          <div className="grid grid-cols-1 gap-3">
+            <div className="border border-border rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-muted/20 border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">Previous known-good</div>
+              <pre className="p-3 text-[10px] font-mono text-foreground whitespace-pre-wrap">{engineeringContext.diff.before}</pre>
+            </div>
+            <div className="border border-border rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-muted/20 border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">Current suspect change</div>
+              <pre className="p-3 text-[10px] font-mono text-foreground whitespace-pre-wrap">{engineeringContext.diff.after}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+    </aside>
+  ) : null;
+
   return (
-    <div>
-      {l2AnalysisView}
-      <ConfirmationDialog open={showConfirmation} onConfirm={handleConfirmApprove} onCancel={() => setShowConfirmation(false)} playbookName={incident.recommendedAction.playbookName} description={incident.recommendedAction.description} affectedService={incident.affectedServices[0]} />
+    <div className={cn('grid gap-4', isL3 ? 'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid-cols-1')}>
+      {analysisStack}
+      {l3Sidebar}
+      <ConfirmationDialog
+        open={showConfirmation}
+        onConfirm={handleConfirmApprove}
+        onCancel={() => setShowConfirmation(false)}
+        playbookName={incident.recommendedAction.playbookName}
+        description={incident.recommendedAction.description}
+        affectedService={incident.affectedServices[0]}
+      />
     </div>
   );
 }

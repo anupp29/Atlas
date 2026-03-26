@@ -5,12 +5,14 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { AtlasLayout } from "@/layouts/AtlasLayout";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Portfolio from "./pages/Portfolio";
 import Incidents from "./pages/Incidents";
 import AuditLog from "./pages/AuditLog";
 import Playbooks from "./pages/Playbooks";
 import ClientPortal from "./pages/ClientPortal";
+import Onboarding from "./pages/Onboarding";
 import SettingsPage from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
@@ -18,7 +20,6 @@ const queryClient = new QueryClient();
 
 function DefaultRedirect() {
   const { user } = useAuth();
-  // SDM → Portfolio, L1/L2/L3 → Incidents, CLIENT → Portal
   if (user?.role === 'SDM') return <Navigate to="/portfolio" replace />;
   if (user?.role === 'CLIENT') return <Navigate to="/portal" replace />;
   return <Navigate to="/incidents" replace />;
@@ -33,12 +34,10 @@ function ProtectedRoutes() {
 
   if (user?.role === 'CLIENT') {
     return (
-      <AtlasLayout>
-        <Routes>
-          <Route path="/portal" element={<ClientPortal />} />
-          <Route path="*" element={<Navigate to="/portal" replace />} />
-        </Routes>
-      </AtlasLayout>
+      <Routes>
+        <Route path="/portal" element={<ClientPortal />} />
+        <Route path="*" element={<Navigate to="/portal" replace />} />
+      </Routes>
     );
   }
 
@@ -49,6 +48,7 @@ function ProtectedRoutes() {
         <Route path="/incidents" element={<Incidents />} />
         <Route path="/playbooks" element={<Playbooks />} />
         <Route path="/audit" element={<AuditLog />} />
+        <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/" element={<DefaultRedirect />} />
         <Route path="*" element={<NotFound />} />
@@ -65,6 +65,7 @@ function AppRoutes() {
 
   return (
     <Routes>
+      <Route path="/" element={isAuthenticated ? <Navigate to={defaultPath} replace /> : <Landing />} />
       <Route path="/login" element={isAuthenticated ? <Navigate to={defaultPath} replace /> : <Login />} />
       <Route path="/*" element={<ProtectedRoutes />} />
     </Routes>
