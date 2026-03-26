@@ -1,15 +1,18 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import Sidebar from './components/Sidebar'
 import ConnectionList from './components/ConnectionList'
 import AddConnectionModal from './components/AddConnectionModal'
 import MonitoringDashboard from './components/MonitoringDashboard'
 import { useConnectionStore } from './store/connectionStore'
+import { useDummyData } from './hooks/useDummyData'
 
 export default function App() {
   const [showAddModal, setShowAddModal] = useState(false)
-  const selectedConnectionId = useConnectionStore((state) => state.selectedConnectionId)
   const selectedConnection = useConnectionStore((state) => state.getSelectedConnection())
+  
+  // Load dummy data on app initialization
+  useDummyData()
 
   return (
     <div className="flex h-screen bg-primary text-slate-100">
