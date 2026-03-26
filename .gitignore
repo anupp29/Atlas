@@ -81,3 +81,5 @@ logs/
 
 # Kiro
 .kiro/settings/mcp.json
+
+run.txt
