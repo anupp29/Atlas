@@ -229,8 +229,10 @@ const retailMaxIncident: Incident = {
   },
 };
 
-// Previously resolved incidents for history
-const resolvedFinanceCore: Incident = {
+// ═══════════════════════════════════════════════
+// Resolved incidents per company
+// ═══════════════════════════════════════════════
+const resolvedFinanceCoreOld: Incident = {
   id: 'INC0041835',
   clientId: 'client-3',
   clientName: 'Deutsche Kredit Bank',
@@ -239,14 +241,14 @@ const resolvedFinanceCore: Incident = {
   affectedServices: ['FraudDetection', 'TransactionProcessor'],
   detectedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
   slaDeadline: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
-  summary: 'The FraudDetection ML model pipeline experienced elevated latency causing delayed transaction scoring. TransactionProcessor queue depth increased due to scoring bottleneck.',
+  summary: 'The FraudDetection ML model pipeline experienced elevated latency causing delayed transaction scoring.',
   businessImpact: 'Transaction scoring delayed by ~8 seconds. No fraudulent transactions missed — fallback rule engine active.',
   services: [
     { id: 's7', name: 'FraudDetection', technology: 'Python / TensorFlow', health: 'healthy', criticality: 'High', triggerMetric: 'Inference latency', triggerValue: '45ms (recovered)' },
     { id: 's8', name: 'TransactionProcessor', technology: 'Java Spring Boot', health: 'healthy', criticality: 'High', triggerMetric: 'Queue depth', triggerValue: '12 (recovered)' },
   ],
   rootCause: {
-    diagnosis: 'GPU memory pressure from concurrent model retraining job caused inference latency spike on FraudDetection service.',
+    diagnosis: 'GPU memory pressure from concurrent model retraining job caused inference latency spike.',
     confidence: 88,
     factors: { historicalAccuracy: 85, rootCauseCertainty: 90, actionSafetyClass: 92, evidenceFreshness: 84 },
   },
@@ -295,11 +297,196 @@ const resolvedEurostar: Incident = {
   approvedBy: 'ATLAS (Auto)',
 };
 
+// ── Additional resolved incidents for each company ──
+const resolvedFinanceCore1: Incident = {
+  id: 'INC0041801',
+  clientId: 'client-financecore',
+  clientName: 'FinanceCore Holdings',
+  priority: 'P2',
+  status: 'Resolved',
+  affectedServices: ['AuthService', 'CoreBanking API'],
+  detectedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 2.5 * 3600 * 1000).toISOString(),
+  summary: 'OAuth token refresh storm on AuthService causing elevated CPU and delayed CoreBanking API responses.',
+  businessImpact: 'Login latency increased 3× for ~5 minutes. No data loss.',
+  services: [
+    { id: 'fc-r1', name: 'AuthService', technology: 'Node.js / Passport', health: 'healthy', criticality: 'High', triggerMetric: 'CPU usage', triggerValue: '28% (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Token cache TTL misconfiguration after deployment.', confidence: 91, factors: { historicalAccuracy: 88, rootCauseCertainty: 93, actionSafetyClass: 95, evidenceFreshness: 89 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'connection-pool-recovery-v2', description: 'Reset token cache TTL.', estimatedTime: '2 minutes', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 2.9 * 3600 * 1000).toISOString(),
+  mttr: '2m 34s',
+  approvedBy: 'A. Petrov',
+};
+
+const resolvedRetailMax1: Incident = {
+  id: 'INC0041818',
+  clientId: 'client-retailmax',
+  clientName: 'RetailMax Group',
+  priority: 'P3',
+  status: 'Resolved',
+  affectedServices: ['CDN Origin', 'ProductCatalog'],
+  detectedAt: new Date(Date.now() - 5 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+  summary: 'CDN cache purge triggered by stale product image URLs. Brief spike in origin requests.',
+  businessImpact: 'Slightly slower image load for ~90 seconds.',
+  services: [
+    { id: 'rm-r1', name: 'CDN Origin', technology: 'CloudFront', health: 'healthy', criticality: 'Medium', triggerMetric: 'Origin requests/s', triggerValue: '120/s (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Bulk product image update triggered cache invalidation storm.', confidence: 95, factors: { historicalAccuracy: 92, rootCauseCertainty: 96, actionSafetyClass: 98, evidenceFreshness: 91 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'redis-memory-recovery-v1', description: 'Rate-limit cache purge operations.', estimatedTime: '1 minute', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 4.9 * 3600 * 1000).toISOString(),
+  mttr: '1m 22s',
+  approvedBy: 'ATLAS (Auto)',
+};
+
+const resolvedSwissRail: Incident = {
+  id: 'INC0041810',
+  clientId: 'client-7',
+  clientName: 'Swiss Federal Railways',
+  priority: 'P2',
+  status: 'Resolved',
+  affectedServices: ['ScheduleService', 'PassengerInfo'],
+  detectedAt: new Date(Date.now() - 7 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
+  summary: 'Schedule data feed delay causing stale departure information on passenger displays.',
+  businessImpact: 'Passenger information boards showed 3-minute-old data for ~8 minutes.',
+  services: [
+    { id: 'sr-r1', name: 'ScheduleService', technology: 'Go / gRPC', health: 'healthy', criticality: 'High', triggerMetric: 'Feed delay', triggerValue: '0s (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Upstream data feed provider experienced transient connectivity issue.', confidence: 82, factors: { historicalAccuracy: 78, rootCauseCertainty: 85, actionSafetyClass: 90, evidenceFreshness: 80 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'kafka-consumer-reset-v1', description: 'Reset data feed consumer and re-sync.', estimatedTime: '3 minutes', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 6.8 * 3600 * 1000).toISOString(),
+  mttr: '3m 15s',
+  approvedBy: 'S. Weber',
+};
+
+const resolvedNHT: Incident = {
+  id: 'INC0041805',
+  clientId: 'client-8',
+  clientName: 'National Health Trust',
+  priority: 'P2',
+  status: 'Resolved',
+  affectedServices: ['PatientPortal', 'AppointmentScheduler'],
+  detectedAt: new Date(Date.now() - 10 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 9 * 3600 * 1000).toISOString(),
+  summary: 'Patient portal login timeout due to LDAP directory service overload during morning shift change.',
+  businessImpact: 'Staff login delayed ~15 seconds for 4 minutes. No patient data affected.',
+  services: [
+    { id: 'nht-r1', name: 'PatientPortal', technology: 'React / .NET Core', health: 'healthy', criticality: 'High', triggerMetric: 'Auth latency', triggerValue: '180ms (recovered)' },
+  ],
+  rootCause: { diagnosis: 'LDAP connection pool saturated during peak shift change logins.', confidence: 90, factors: { historicalAccuracy: 87, rootCauseCertainty: 92, actionSafetyClass: 94, evidenceFreshness: 86 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'connection-pool-recovery-v2', description: 'Expand LDAP connection pool.', estimatedTime: '2 minutes', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 9.9 * 3600 * 1000).toISOString(),
+  mttr: '2m 48s',
+  approvedBy: 'A. Petrov',
+};
+
+const resolvedUKBorder: Incident = {
+  id: 'INC0041798',
+  clientId: 'client-9',
+  clientName: 'UK Border Agency',
+  priority: 'P3',
+  status: 'Resolved',
+  affectedServices: ['PassportVerification'],
+  detectedAt: new Date(Date.now() - 12 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 11 * 3600 * 1000).toISOString(),
+  summary: 'PassportVerification OCR model slight accuracy degradation after image preprocessing library update.',
+  businessImpact: 'Manual verification fallback triggered for ~2% of scans. No traveller delays.',
+  services: [
+    { id: 'ukb-r1', name: 'PassportVerification', technology: 'Python / OpenCV', health: 'healthy', criticality: 'High', triggerMetric: 'OCR accuracy', triggerValue: '99.7% (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Image preprocessing library update changed default color space conversion.', confidence: 93, factors: { historicalAccuracy: 90, rootCauseCertainty: 95, actionSafetyClass: 96, evidenceFreshness: 88 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'k8s-pod-reschedule-v2', description: 'Rollback preprocessing library version.', estimatedTime: '4 minutes', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 11.8 * 3600 * 1000).toISOString(),
+  mttr: '3m 52s',
+  approvedBy: 'J. Nakamura',
+};
+
+const resolvedBundesamt: Incident = {
+  id: 'INC0041792',
+  clientId: 'client-6',
+  clientName: 'Bundesamt für Sicherheit',
+  priority: 'P3',
+  status: 'Resolved',
+  affectedServices: ['AuditTrailService'],
+  detectedAt: new Date(Date.now() - 15 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 14 * 3600 * 1000).toISOString(),
+  summary: 'Audit trail log rotation failed due to disk space threshold breach on logging partition.',
+  businessImpact: 'No data loss — audit logs buffered in memory. Rotation resumed after cleanup.',
+  services: [
+    { id: 'bfs-r1', name: 'AuditTrailService', technology: 'Java / Log4j2', health: 'healthy', criticality: 'High', triggerMetric: 'Disk usage', triggerValue: '62% (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Archived logs not rotated due to cron job misconfiguration.', confidence: 97, factors: { historicalAccuracy: 95, rootCauseCertainty: 98, actionSafetyClass: 99, evidenceFreshness: 93 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'k8s-pod-reschedule-v2', description: 'Fix cron schedule, clean archived logs.', estimatedTime: '2 minutes', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 14.9 * 3600 * 1000).toISOString(),
+  mttr: '1m 18s',
+  approvedBy: 'ATLAS (Auto)',
+};
+
+const resolvedMarseille: Incident = {
+  id: 'INC0041788',
+  clientId: 'client-5',
+  clientName: 'Marseille Port Authority',
+  priority: 'P3',
+  status: 'Resolved',
+  affectedServices: ['IoT Data Ingestion', 'Alert Manager'],
+  detectedAt: new Date(Date.now() - 18 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 17 * 3600 * 1000).toISOString(),
+  summary: 'IoT sensor data ingestion lag due to Kafka consumer group rebalance after node restart.',
+  businessImpact: 'Sensor telemetry delayed by ~45 seconds during rebalance. No operational impact.',
+  services: [
+    { id: 'mp-r1', name: 'IoT Data Ingestion', technology: 'Kafka Streams', health: 'healthy', criticality: 'Medium', triggerMetric: 'Consumer lag', triggerValue: '0 (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Kafka consumer group rebalance after scheduled node maintenance restart.', confidence: 96, factors: { historicalAccuracy: 94, rootCauseCertainty: 97, actionSafetyClass: 98, evidenceFreshness: 92 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'kafka-consumer-reset-v1', description: 'Verified auto-recovery. No action needed.', estimatedTime: '1 minute', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 17.9 * 3600 * 1000).toISOString(),
+  mttr: '0m 58s',
+  approvedBy: 'ATLAS (Auto)',
+};
+
+const resolvedRijkswaterstaat: Incident = {
+  id: 'INC0041782',
+  clientId: 'client-10',
+  clientName: 'Rijkswaterstaat',
+  priority: 'P3',
+  status: 'Resolved',
+  affectedServices: ['Water Level Monitor'],
+  detectedAt: new Date(Date.now() - 20 * 3600 * 1000).toISOString(),
+  slaDeadline: new Date(Date.now() - 19 * 3600 * 1000).toISOString(),
+  summary: 'Water level monitoring dashboard data refresh intermittently stalling due to WebSocket connection drops.',
+  businessImpact: 'Dashboard data stale for ~30 seconds per drop. Automatic reconnect resolved each instance.',
+  services: [
+    { id: 'rw-r1', name: 'Water Level Monitor', technology: 'Python / FastAPI / WebSocket', health: 'healthy', criticality: 'Medium', triggerMetric: 'WS reconnects/hr', triggerValue: '0 (recovered)' },
+  ],
+  rootCause: { diagnosis: 'Load balancer idle timeout shorter than WebSocket heartbeat interval.', confidence: 94, factors: { historicalAccuracy: 91, rootCauseCertainty: 96, actionSafetyClass: 97, evidenceFreshness: 90 } },
+  alternativeHypotheses: [],
+  recommendedAction: { playbookName: 'k8s-pod-reschedule-v2', description: 'Increase LB idle timeout to match WS heartbeat.', estimatedTime: '1 minute', riskClass: 'Low', rollbackAvailable: true },
+  resolvedAt: new Date(Date.now() - 19.8 * 3600 * 1000).toISOString(),
+  mttr: '1m 05s',
+  approvedBy: 'ATLAS (Auto)',
+};
+
 export const mockIncidents: Incident[] = [
   financeCoreIncident,
   retailMaxIncident,
-  resolvedFinanceCore,
+  resolvedFinanceCoreOld,
   resolvedEurostar,
+  resolvedFinanceCore1,
+  resolvedRetailMax1,
+  resolvedSwissRail,
+  resolvedNHT,
+  resolvedUKBorder,
+  resolvedBundesamt,
+  resolvedMarseille,
+  resolvedRijkswaterstaat,
 ];
 
 export const mockActivityFeed: ActivityFeedEntry[] = [
@@ -327,16 +514,16 @@ export const mockAuditLog: AuditEntry[] = [
   { id: 'au3', timestamp: '2025-03-25 09:42:22', incidentId: 'INC0041827', client: 'FinanceCore Holdings', actionType: 'Ticket Created', actor: 'ATLAS', outcome: 'Success', confidence: 94, details: { reasoningChain: 'HikariCP connection pool exhaustion detected via metric threshold breach → dependency graph traversal identified cascade to TransactionProcessor and FraudEngine → deployment correlation found CHG0008834 (pool size reduction) → historical match INC0038291 at 91% similarity → confidence 94%', vetoes: ['PCI-DSS: Production database changes require dual sign-off'], playbookSteps: ['Pre-validation checks', 'PATCH maxPoolSize via Actuator', 'Monitor pool utilization recovery', 'Validate cascade resolution', 'Confirm FraudEngine throughput'], metricValues: { 'hikaricp_pool_usage_pct': 94, 'payment_gateway_p99_ms': 4200, 'transaction_timeout_pct': 23, 'fraud_scoring_tps': 340 } } },
   { id: 'au4', timestamp: '2025-03-25 09:38:12', incidentId: 'INC0041830', client: 'RetailMax Group', actionType: 'Detection', actor: 'ATLAS', outcome: 'Success', confidence: 87 },
   { id: 'au5', timestamp: '2025-03-25 09:38:14', incidentId: 'INC0041830', client: 'RetailMax Group', actionType: 'Classification', actor: 'ATLAS', outcome: 'Success', confidence: 87 },
-  { id: 'au6', timestamp: '2025-03-25 09:38:16', incidentId: 'INC0041830', client: 'RetailMax Group', actionType: 'Routed to L2', actor: 'ATLAS', outcome: 'Success', confidence: 87, details: { reasoningChain: 'Redis OOM detected at 94% utilization → cache eviction rate spike (8,400/min vs 120/min baseline) → deployment correlation CHG0009012 (analytics pipeline) → analytics namespace consuming 41% memory → historical partial match INC0039445 (84%) → confidence 87% below L1 auto-threshold → routed to L2', vetoes: [], playbookSteps: ['Terminate analytics pipeline', 'Flush analytics:* namespace', 'Pre-warm top 10K product SKUs', 'Monitor cache hit ratio recovery', 'Validate SearchService freshness'], metricValues: { 'redis_memory_pct': 94, 'eviction_rate_per_min': 8400, 'cache_hit_ratio_pct': 41, 'catalog_p95_ms': 2800 } } },
+  { id: 'au6', timestamp: '2025-03-25 09:38:16', incidentId: 'INC0041830', client: 'RetailMax Group', actionType: 'Routed to L2', actor: 'ATLAS', outcome: 'Success', confidence: 87, details: { reasoningChain: 'Redis OOM detected at 94% utilization → cache eviction rate spike → deployment correlation CHG0009012 → analytics namespace consuming 41% memory → routed to L2', vetoes: [], playbookSteps: ['Terminate analytics pipeline', 'Flush analytics:* namespace', 'Pre-warm top 10K product SKUs', 'Monitor cache hit ratio recovery', 'Validate SearchService freshness'], metricValues: { 'redis_memory_pct': 94, 'eviction_rate_per_min': 8400, 'cache_hit_ratio_pct': 41, 'catalog_p95_ms': 2800 } } },
   { id: 'au7', timestamp: '2025-03-25 09:30:44', incidentId: 'INC0041825', client: 'Eurostar Rail Operations', actionType: 'Auto-Executed', actor: 'ATLAS', outcome: 'Success', confidence: 99 },
   { id: 'au8', timestamp: '2025-03-25 09:30:44', incidentId: 'INC0041825', client: 'Eurostar Rail Operations', actionType: 'Resolved', actor: 'ATLAS', outcome: 'Success', confidence: 99 },
   { id: 'au9', timestamp: '2025-03-25 09:15:00', incidentId: 'INC0041835', client: 'Deutsche Kredit Bank', actionType: 'L2 Approved', actor: 'S. Weber', outcome: 'Success', confidence: 88 },
   { id: 'au10', timestamp: '2025-03-25 09:14:30', incidentId: 'INC0041835', client: 'Deutsche Kredit Bank', actionType: 'Resolved', actor: 'ATLAS', outcome: 'Success', confidence: 88 },
   { id: 'au11', timestamp: '2025-03-25 08:55:00', incidentId: 'INC0041818', client: 'Swiss Federal Railways', actionType: 'L1 Approved', actor: 'A. Petrov', outcome: 'Success', confidence: 91 },
-  { id: 'au12', timestamp: '2025-03-24 17:22:00', incidentId: 'INC0041812', client: 'FinanceCore Holdings', actionType: 'L2 Approved', actor: 'S. Weber', outcome: 'Rolled Back', confidence: 72, details: { reasoningChain: 'Memory leak detected in AuthService → garbage collection analysis → JVM heap adjustment recommended → execution succeeded but metric did not recover within validation window → auto-rollback triggered', vetoes: [], playbookSteps: ['Pre-validation', 'Adjust JVM heap', 'Force GC cycle', 'Monitor heap usage', 'Auto-rollback triggered'], metricValues: { 'heap_usage_pct': 89, 'gc_pause_ms': 340, 'response_time_ms': 2800 } } },
+  { id: 'au12', timestamp: '2025-03-24 17:22:00', incidentId: 'INC0041812', client: 'FinanceCore Holdings', actionType: 'L2 Approved', actor: 'S. Weber', outcome: 'Rolled Back', confidence: 72, details: { reasoningChain: 'Memory leak detected in AuthService → JVM heap adjustment recommended → execution succeeded but metric did not recover → auto-rollback triggered', vetoes: [], playbookSteps: ['Pre-validation', 'Adjust JVM heap', 'Force GC cycle', 'Monitor heap usage', 'Auto-rollback triggered'], metricValues: { 'heap_usage_pct': 89, 'gc_pause_ms': 340, 'response_time_ms': 2800 } } },
   { id: 'au13', timestamp: '2025-03-24 14:10:00', incidentId: 'INC0041808', client: 'Bundesamt für Sicherheit', actionType: 'Auto-Executed', actor: 'ATLAS', outcome: 'Success', confidence: 97 },
   { id: 'au14', timestamp: '2025-03-24 11:30:00', incidentId: 'INC0041805', client: 'Marseille Port Authority', actionType: 'L1 Approved', actor: 'A. Petrov', outcome: 'Success', confidence: 93 },
-  { id: 'au15', timestamp: '2025-03-24 08:45:00', incidentId: 'INC0041801', client: 'FinanceCore Holdings', actionType: 'Dual Approval', actor: 'S. Weber + C. Laurent', outcome: 'Success', confidence: 90, details: { reasoningChain: 'PCI-DSS flagged client → dual approval required for production config change → primary approval by S. Weber → secondary approval by C. Laurent within 8 minutes → executed successfully', vetoes: ['PCI-DSS: Production database changes require dual sign-off'], playbookSteps: ['Primary approval', 'Secondary approval', 'Execute config patch', 'Validate payment flow', 'Confirm card data integrity'], metricValues: { 'payment_success_rate': 99.7, 'latency_p99_ms': 230, 'error_rate_pct': 0.3 } } },
+  { id: 'au15', timestamp: '2025-03-24 08:45:00', incidentId: 'INC0041801', client: 'FinanceCore Holdings', actionType: 'Dual Approval', actor: 'S. Weber + C. Laurent', outcome: 'Success', confidence: 90, details: { reasoningChain: 'PCI-DSS flagged client → dual approval required → executed successfully', vetoes: ['PCI-DSS: Production database changes require dual sign-off'], playbookSteps: ['Primary approval', 'Secondary approval', 'Execute config patch', 'Validate payment flow', 'Confirm card data integrity'], metricValues: { 'payment_success_rate': 99.7, 'latency_p99_ms': 230, 'error_rate_pct': 0.3 } } },
 ];
 
 export const mockPlaybooks: Playbook[] = [
@@ -348,10 +535,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '4 minutes',
     lastUsed: '2025-03-25',
     successRate: 97,
-    description: 'Restores HikariCP connection pool parameters via Spring Actuator endpoint. Adjusts maxPoolSize, minIdle, and connectionTimeout to recommended values based on current traffic patterns and historical pool utilization data.',
-    preValidation: ['Verify Spring Actuator endpoint is accessible on target service', 'Confirm current pool metrics via /actuator/metrics/hikaricp.connections', 'Check no active database migrations or schema changes running', 'Validate target pool size is within safe range (50-300)'],
-    successCriteria: ['Connection pool utilization below 70% within 2 minutes', 'p99 response time returns below 500ms threshold', 'No 5xx errors in 2-minute validation window', 'Downstream service cascade recovery confirmed'],
-    rollbackProcedure: 'Revert maxPoolSize to previous value via same Actuator endpoint. If Actuator is unresponsive, restart service with previous configuration from config server.',
+    description: 'Restores HikariCP connection pool parameters via Spring Actuator endpoint. Adjusts maxPoolSize, minIdle, and connectionTimeout based on current traffic patterns.',
+    preValidation: ['Verify Spring Actuator endpoint is accessible', 'Confirm current pool metrics via /actuator/metrics/hikaricp.connections', 'Check no active database migrations', 'Validate target pool size is within safe range (50-300)'],
+    successCriteria: ['Connection pool utilization below 70% within 2 minutes', 'p99 response time returns below 500ms', 'No 5xx errors in 2-minute window', 'Downstream cascade recovery confirmed'],
+    rollbackProcedure: 'Revert maxPoolSize to previous value via Actuator. If unresponsive, restart service with previous config.',
     executionHistory: [
       { date: '2025-03-21', client: 'FinanceCore Holdings', outcome: 'Success' },
       { date: '2025-03-08', client: 'Deutsche Kredit Bank', outcome: 'Success' },
@@ -368,10 +555,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '6 minutes',
     lastUsed: '2025-03-25',
     successRate: 94,
-    description: 'Terminates memory-intensive background processes, selectively flushes affected cache namespaces using SCAN-based key deletion, and pre-warms critical data from upstream sources. Designed for multi-tenant Redis clusters where namespace isolation is critical.',
-    preValidation: ['Verify Redis admin access via AUTH and CONFIG GET', 'Identify memory-consuming key namespaces via MEMORY USAGE sampling', 'Confirm upstream API/database availability for cache warming', 'Validate no ongoing Redis BGSAVE or BGREWRITEAOF operations'],
-    successCriteria: ['Redis memory utilization below 70% within 3 minutes', 'Cache hit ratio above 85% within 5 minutes', 'No new eviction events in 5-minute validation window', 'ProductCatalog p95 response time below 300ms'],
-    rollbackProcedure: 'If cache warming fails or response times remain elevated, restart Redis nodes in rolling fashion with previous maxmemory-policy setting.',
+    description: 'Terminates memory-intensive background processes, selectively flushes affected cache namespaces, and pre-warms critical data from upstream sources.',
+    preValidation: ['Verify Redis admin access', 'Identify memory-consuming key namespaces', 'Confirm upstream API availability for cache warming', 'Validate no ongoing BGSAVE operations'],
+    successCriteria: ['Redis memory below 70% within 3 minutes', 'Cache hit ratio above 85% within 5 minutes', 'No new eviction events in 5-minute window', 'ProductCatalog p95 below 300ms'],
+    rollbackProcedure: 'If cache warming fails, restart Redis nodes in rolling fashion with previous maxmemory-policy.',
     executionHistory: [
       { date: '2025-03-20', client: 'RetailMax Group', outcome: 'Success' },
       { date: '2025-03-05', client: 'Swiss Federal Railways', outcome: 'Success' },
@@ -387,10 +574,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '2 minutes',
     lastUsed: '2025-03-25',
     successRate: 100,
-    description: 'Automated TLS certificate renewal via ACME protocol. Validates new certificate chain, updates load balancer configuration, and confirms HTTPS endpoint health across all DNS endpoints.',
+    description: 'Automated TLS certificate renewal via ACME protocol. Validates new certificate chain, updates load balancer, confirms HTTPS endpoint health.',
     preValidation: ['Verify ACME endpoint reachable', 'Check DNS challenge records', 'Confirm load balancer admin API accessible'],
     successCriteria: ['New certificate valid and matching domain', 'HTTPS endpoint returning 200', 'Certificate expiry > 85 days'],
-    rollbackProcedure: 'Restore previous certificate from backup. Manual certificate rotation if ACME fails.',
+    rollbackProcedure: 'Restore previous certificate from backup.',
     executionHistory: [
       { date: '2025-03-25', client: 'Eurostar Rail Operations', outcome: 'Success' },
       { date: '2025-03-12', client: 'Deutsche Kredit Bank', outcome: 'Success' },
@@ -406,10 +593,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '8 minutes',
     lastUsed: '2025-03-10',
     successRate: 89,
-    description: 'Adjusts JVM heap parameters and triggers graceful garbage collection cycle. Requires service restart in rolling deployment mode to avoid downtime.',
+    description: 'Adjusts JVM heap parameters and triggers graceful garbage collection cycle. Requires rolling restart.',
     preValidation: ['Verify rolling deployment capability', 'Check current heap utilization', 'Confirm no active batch processing'],
     successCriteria: ['Heap utilization below 75%', 'GC pause times below 200ms', 'No OOM errors in 10-minute window'],
-    rollbackProcedure: 'Revert JVM flags to previous values and restart service with original configuration.',
+    rollbackProcedure: 'Revert JVM flags and restart with original configuration.',
     executionHistory: [
       { date: '2025-03-10', client: 'FinanceCore Holdings', outcome: 'Success' },
       { date: '2025-02-05', client: 'Bundesamt für Sicherheit', outcome: 'Success' },
@@ -423,10 +610,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '3 minutes',
     lastUsed: '2025-03-25',
     successRate: 95,
-    description: 'Deprioritizes background model retraining jobs, clears GPU memory allocation, and restores inference pipeline priority to resolve latency spikes in ML-powered services.',
-    preValidation: ['Verify GPU management API accessible', 'Check active training job status', 'Confirm inference pipeline health endpoint'],
-    successCriteria: ['Inference latency below 100ms', 'GPU memory usage below 60%', 'Training job safely paused'],
-    rollbackProcedure: 'Resume training job with reduced GPU allocation. If inference remains degraded, restart inference service.',
+    description: 'Deprioritizes background model retraining, clears GPU memory, restores inference pipeline priority.',
+    preValidation: ['Verify GPU management API accessible', 'Check active training job status', 'Confirm inference pipeline health'],
+    successCriteria: ['Inference latency below 100ms', 'GPU memory below 60%', 'Training job safely paused'],
+    rollbackProcedure: 'Resume training with reduced GPU allocation.',
     executionHistory: [
       { date: '2025-03-25', client: 'Deutsche Kredit Bank', outcome: 'Success' },
     ],
@@ -439,10 +626,10 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '6 minutes',
     lastUsed: '2025-03-18',
     successRate: 92,
-    description: 'Resets a stale Kafka consumer instance and triggers consumer group rebalancing. Monitors consumer lag reduction and validates data flow resumption across all assigned partitions.',
+    description: 'Resets stale Kafka consumer and triggers consumer group rebalancing. Monitors lag reduction.',
     preValidation: ['Verify Kafka broker connectivity', 'Check consumer group membership', 'Confirm no partition reassignment in progress'],
-    successCriteria: ['Consumer lag below 100 messages', 'Error rate below 1%', 'All partitions assigned to active consumers'],
-    rollbackProcedure: 'Stop consumer group, reset offsets to last committed position, restart consumers.',
+    successCriteria: ['Consumer lag below 100 messages', 'Error rate below 1%', 'All partitions assigned'],
+    rollbackProcedure: 'Stop consumer group, reset offsets, restart consumers.',
     executionHistory: [
       { date: '2025-03-18', client: 'RetailMax Group', outcome: 'Success' },
       { date: '2025-02-28', client: 'Marseille Port Authority', outcome: 'Success' },
@@ -456,13 +643,51 @@ export const mockPlaybooks: Playbook[] = [
     estimatedTime: '7 minutes',
     lastUsed: '2025-03-15',
     successRate: 91,
-    description: 'Cordons the affected node, drains pods gracefully respecting PodDisruptionBudgets, and triggers rescheduling to healthy nodes in the cluster.',
+    description: 'Cordons affected node, drains pods gracefully, triggers rescheduling to healthy nodes.',
     preValidation: ['Verify cluster API access', 'Check available node capacity', 'Confirm PodDisruptionBudget compliance'],
-    successCriteria: ['All pods rescheduled and healthy', 'No service disruption during drain', 'Node cordoned and labeled for investigation'],
-    rollbackProcedure: 'Uncordon the node and allow scheduler to rebalance naturally.',
+    successCriteria: ['All pods rescheduled and healthy', 'No service disruption during drain', 'Node cordoned for investigation'],
+    rollbackProcedure: 'Uncordon node and allow scheduler to rebalance.',
     executionHistory: [
       { date: '2025-03-15', client: 'UK Border Agency', outcome: 'Success' },
       { date: '2025-02-22', client: 'Rijkswaterstaat', outcome: 'Success' },
     ],
   },
 ];
+
+// Company-specific playbooks
+export const companyPlaybooks: Record<string, Playbook[]> = {
+  'client-financecore': [
+    {
+      id: 'cpb-fc-1', name: 'financecore-pci-dual-approval-v1', technologyDomain: 'Compliance / PCI-DSS', actionClass: 'Class 2', estimatedTime: '5 minutes', lastUsed: '2025-03-24', successRate: 100,
+      description: 'PCI-DSS compliant dual-approval workflow for FinanceCore production changes. Requires sign-off from both L2 engineer and SDM before execution.',
+      preValidation: ['Verify PCI-DSS compliance scope', 'Confirm both approvers available', 'Check card data isolation boundaries'],
+      successCriteria: ['Dual approval received within SLA', 'Change executed without card data exposure', 'Audit trail complete'],
+      rollbackProcedure: 'Reverse change and notify compliance officer.', executionHistory: [{ date: '2025-03-24', client: 'FinanceCore Holdings', outcome: 'Success' }, { date: '2025-03-15', client: 'FinanceCore Holdings', outcome: 'Success' }],
+    },
+    {
+      id: 'cpb-fc-2', name: 'financecore-fraud-model-refresh-v1', technologyDomain: 'Python / TensorFlow', actionClass: 'Class 1', estimatedTime: '4 minutes', lastUsed: '2025-03-20', successRate: 96,
+      description: 'Refreshes FraudEngine model weights from approved staging model. Validates scoring accuracy against known fraud patterns before cutover.',
+      preValidation: ['Staging model accuracy ≥ 99.2%', 'GPU memory available', 'Scoring queue drained'],
+      successCriteria: ['Production accuracy matches staging within 0.1%', 'Inference latency under 50ms', 'No false positive spike'],
+      rollbackProcedure: 'Revert to previous model weights.', executionHistory: [{ date: '2025-03-20', client: 'FinanceCore Holdings', outcome: 'Success' }],
+    },
+  ],
+  'client-retailmax': [
+    {
+      id: 'cpb-rm-1', name: 'retailmax-flash-sale-cache-prep-v1', technologyDomain: 'Redis / CDN', actionClass: 'Class 1', estimatedTime: '8 minutes', lastUsed: '2025-03-18', successRate: 100,
+      description: 'Pre-warms product cache and CDN for flash sale events. Scales Redis memory, pre-loads top 50K SKUs, and configures CDN edge rules for high-traffic product pages.',
+      preValidation: ['Flash sale product list available', 'Redis memory can accommodate 20% increase', 'CDN admin API accessible'],
+      successCriteria: ['All sale products cached at edge', 'Cache hit ratio > 98% for sale items', 'Origin load within capacity'],
+      rollbackProcedure: 'Flush sale-specific cache keys, revert CDN rules.', executionHistory: [{ date: '2025-03-18', client: 'RetailMax Group', outcome: 'Success' }, { date: '2025-02-14', client: 'RetailMax Group', outcome: 'Success' }],
+    },
+  ],
+  'client-8': [
+    {
+      id: 'cpb-nht-1', name: 'nht-ehr-failover-v1', technologyDomain: 'Healthcare / HL7 FHIR', actionClass: 'Class 2', estimatedTime: '6 minutes', lastUsed: '2025-03-12', successRate: 98,
+      description: 'Initiates EHR system failover to secondary data center. Validates patient record accessibility and HL7 FHIR API continuity.',
+      preValidation: ['Secondary DC health verified', 'Replication lag < 2 seconds', 'No active surgical procedures flagged'],
+      successCriteria: ['Patient records accessible within 30s', 'HL7 FHIR API responding normally', 'Clinical workflow uninterrupted'],
+      rollbackProcedure: 'Failback to primary DC with data reconciliation.', executionHistory: [{ date: '2025-03-12', client: 'National Health Trust', outcome: 'Success' }],
+    },
+  ],
+};

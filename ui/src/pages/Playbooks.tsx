@@ -1,18 +1,27 @@
 import { useState } from 'react';
-import { mockPlaybooks } from '@/data/mock';
+import { mockPlaybooks, companyPlaybooks, mockClients } from '@/data/mock';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Search, CheckCircle2, XCircle, RotateCcw, Play, Clock, Shield, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Search, CheckCircle2, XCircle, RotateCcw, Play, Clock, Shield, TrendingUp, Building2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Playbook } from '@/types/atlas';
+
+type PlaybookScope = 'universal' | string; // clientId
 
 export default function Playbooks() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Playbook | null>(null);
+  const [scope, setScope] = useState<PlaybookScope>('universal');
   const [simulating, setSimulating] = useState(false);
   const [simResult, setSimResult] = useState<string | null>(null);
 
-  const filtered = mockPlaybooks.filter(pb =>
+  const clientsWithPlaybooks = mockClients.filter(c => companyPlaybooks[c.id]?.length > 0);
+
+  const currentPlaybooks = scope === 'universal'
+    ? mockPlaybooks
+    : (companyPlaybooks[scope] || []);
+
+  const filtered = currentPlaybooks.filter(pb =>
     pb.name.toLowerCase().includes(search.toLowerCase()) ||
     pb.technologyDomain.toLowerCase().includes(search.toLowerCase()) ||
     pb.description.toLowerCase().includes(search.toLowerCase())
@@ -27,9 +36,6 @@ export default function Playbooks() {
     }, 2500);
   };
 
-  const totalExecutions = mockPlaybooks.reduce((sum, pb) => sum + pb.executionHistory.length, 0);
-  const avgSuccessRate = Math.round(mockPlaybooks.reduce((sum, pb) => sum + pb.successRate, 0) / mockPlaybooks.length);
-
   if (selected) {
     const successCount = selected.executionHistory.filter(e => e.outcome === 'Success').length;
     const failCount = selected.executionHistory.filter(e => e.outcome === 'Failed').length;
@@ -41,12 +47,10 @@ export default function Playbooks() {
           <ArrowLeft className="h-3 w-3" /> Back to library
         </button>
 
-        {/* Header */}
-        <div className="bg-card border border-border rounded-lg p-5 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-5">
           <div className="flex items-center gap-2.5 mb-2">
             <h1 className="text-[14px] font-semibold text-foreground font-mono">{selected.name}</h1>
-            <span className={cn(
-              'text-[9px] font-semibold px-2 py-0.5 rounded-full uppercase',
+            <span className={cn('text-[9px] font-semibold px-2 py-0.5 rounded-full uppercase',
               selected.actionClass === 'Class 1' ? 'bg-status-healthy/10 text-status-healthy' : 'bg-status-warning/10 text-status-warning',
             )}>{selected.actionClass}</span>
           </div>
@@ -55,35 +59,32 @@ export default function Playbooks() {
             <span>{selected.technologyDomain}</span>
             <span>Est. {selected.estimatedTime}</span>
             <span>Success: <span className="font-mono font-medium text-foreground">{selected.successRate}%</span></span>
-            <span>Last used: {selected.lastUsed}</span>
           </div>
         </div>
 
-        {/* Stats row */}
         <div className="grid grid-cols-3 gap-3">
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
+          <div className="bg-card border border-border rounded-lg p-3 text-center">
             <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{successCount}</p>
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Successful</p>
           </div>
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
+          <div className="bg-card border border-border rounded-lg p-3 text-center">
             <p className="text-[20px] font-semibold text-status-warning tabular-nums">{rollbackCount}</p>
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Rolled Back</p>
           </div>
-          <div className="bg-card border border-border rounded-lg p-3 shadow-atlas text-center">
+          <div className="bg-card border border-border rounded-lg p-3 text-center">
             <p className="text-[20px] font-semibold text-status-critical tabular-nums">{failCount}</p>
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Failed</p>
           </div>
         </div>
 
-        {/* Pre-validation + Success criteria */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+          <div className="bg-card border border-border rounded-lg p-4">
             <h3 className="text-[11px] font-semibold text-foreground mb-2.5 uppercase tracking-wider">Pre-execution Validation</h3>
             <ol className="list-decimal list-inside space-y-1.5 text-[12px] text-foreground">
               {selected.preValidation.map((s, i) => <li key={i}>{s}</li>)}
             </ol>
           </div>
-          <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+          <div className="bg-card border border-border rounded-lg p-4">
             <h3 className="text-[11px] font-semibold text-foreground mb-2.5 uppercase tracking-wider">Success Criteria</h3>
             <ul className="space-y-1.5 text-[12px] text-foreground">
               {selected.successCriteria.map((c, i) => (
@@ -96,23 +97,15 @@ export default function Playbooks() {
           </div>
         </div>
 
-        {/* Rollback */}
-        <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-4">
           <h3 className="text-[11px] font-semibold text-foreground mb-2 uppercase tracking-wider">Rollback Procedure</h3>
           <p className="text-[12px] text-foreground leading-relaxed">{selected.rollbackProcedure}</p>
         </div>
 
-        {/* Dry Run */}
-        <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Dry Run Simulation</h3>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 text-[11px] h-7"
-              onClick={handleDryRun}
-              disabled={simulating}
-            >
+            <Button variant="outline" size="sm" className="gap-1.5 text-[11px] h-7" onClick={handleDryRun} disabled={simulating}>
               <Play className="h-3 w-3" />
               {simulating ? 'Simulating...' : 'Run Dry Test'}
             </Button>
@@ -120,7 +113,7 @@ export default function Playbooks() {
           {simulating && (
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <div className="h-3 w-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-              Executing pre-validation checks in sandbox environment...
+              Executing pre-validation checks in sandbox...
             </div>
           )}
           {simResult && (
@@ -133,12 +126,9 @@ export default function Playbooks() {
           )}
         </div>
 
-        {/* Execution history */}
-        <div className="bg-card border border-border rounded-lg shadow-atlas">
+        <div className="bg-card border border-border rounded-lg">
           <div className="px-4 py-3 border-b border-border">
-            <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
-              Execution History <span className="font-normal text-muted-foreground ml-1">({selected.executionHistory.length} runs)</span>
-            </h3>
+            <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Execution History</h3>
           </div>
           <table className="w-full">
             <thead>
@@ -146,7 +136,6 @@ export default function Playbooks() {
                 <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Date</th>
                 <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Client</th>
                 <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Outcome</th>
-                <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Details</th>
               </tr>
             </thead>
             <tbody>
@@ -166,11 +155,6 @@ export default function Playbooks() {
                       )}>{exec.outcome}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-2 text-[10px] text-muted-foreground">
-                    {exec.outcome === 'Success' ? 'All success criteria met within validation window' :
-                     exec.outcome === 'Rolled Back' ? 'Metrics did not recover — auto-rollback triggered' :
-                     'Execution failed — manual intervention required'}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -184,69 +168,84 @@ export default function Playbooks() {
     <div className="space-y-4">
       <div>
         <h1 className="text-[16px] font-semibold text-foreground">Playbook Library</h1>
-        <p className="text-[12px] text-muted-foreground mt-0.5">
-          {filtered.length} pre-approved, versioned, auditable resolution playbooks
-        </p>
+        <p className="text-[12px] text-muted-foreground mt-0.5">Pre-approved, versioned, auditable resolution playbooks</p>
       </div>
 
-      {/* Summary stats */}
+      {/* Scope tabs */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => { setScope('universal'); setSearch(''); }}
+          className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-colors',
+            scope === 'universal' ? 'bg-accent/10 border-accent/30 text-accent' : 'border-border text-muted-foreground hover:border-accent/20'
+          )}
+        >
+          <Shield className="h-3 w-3" /> Universal ({mockPlaybooks.length})
+        </button>
+        {clientsWithPlaybooks.map(c => (
+          <button
+            key={c.id}
+            onClick={() => { setScope(c.id); setSearch(''); }}
+            className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-colors',
+              scope === c.id ? 'bg-accent/10 border-accent/30 text-accent' : 'border-border text-muted-foreground hover:border-accent/20'
+            )}
+          >
+            <Building2 className="h-3 w-3" /> {c.name} ({companyPlaybooks[c.id]?.length || 0})
+          </button>
+        ))}
+      </div>
+
+      {/* Stats */}
       <div className="grid grid-cols-4 gap-3">
-        <div className="bg-card border border-border rounded-lg p-3 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <Shield className="h-3 w-3 text-muted-foreground" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Playbooks</span>
           </div>
-          <p className="text-[20px] font-semibold text-foreground tabular-nums">{mockPlaybooks.length}</p>
+          <p className="text-[20px] font-semibold text-foreground tabular-nums">{currentPlaybooks.length}</p>
         </div>
-        <div className="bg-card border border-border rounded-lg p-3 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <Play className="h-3 w-3 text-muted-foreground" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Total Runs</span>
           </div>
-          <p className="text-[20px] font-semibold text-foreground tabular-nums">{totalExecutions}</p>
+          <p className="text-[20px] font-semibold text-foreground tabular-nums">{currentPlaybooks.reduce((s, p) => s + p.executionHistory.length, 0)}</p>
         </div>
-        <div className="bg-card border border-border rounded-lg p-3 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <TrendingUp className="h-3 w-3 text-status-healthy" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg Success</span>
           </div>
-          <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{avgSuccessRate}%</p>
+          <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{currentPlaybooks.length > 0 ? Math.round(currentPlaybooks.reduce((s, p) => s + p.successRate, 0) / currentPlaybooks.length) : 0}%</p>
         </div>
-        <div className="bg-card border border-border rounded-lg p-3 shadow-atlas">
+        <div className="bg-card border border-border rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <Clock className="h-3 w-3 text-muted-foreground" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Domains</span>
           </div>
-          <p className="text-[20px] font-semibold text-foreground tabular-nums">{new Set(mockPlaybooks.map(p => p.technologyDomain)).size}</p>
+          <p className="text-[20px] font-semibold text-foreground tabular-nums">{new Set(currentPlaybooks.map(p => p.technologyDomain)).size}</p>
         </div>
       </div>
 
       <div className="relative max-w-xs">
         <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
-        <Input placeholder="Search by name, technology, keyword..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-7 h-7 text-[11px]" />
+        <Input placeholder="Search playbooks..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-7 h-7 text-[11px]" />
       </div>
 
-      <div className="bg-card border border-border rounded-lg shadow-atlas">
+      <div className="bg-card border border-border rounded-lg">
         <table className="w-full">
           <thead>
             <tr className="border-b border-border">
               <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Name</th>
               <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Domain</th>
               <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Class</th>
-              <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Est. Time</th>
               <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Success</th>
               <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Runs</th>
-              <th className="text-left px-4 py-2.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Last Used</th>
               <th className="px-4 py-2.5"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="text-center py-10 text-[12px] text-muted-foreground">
-                  No playbooks match your search.
-                </td>
-              </tr>
+              <tr><td colSpan={6} className="text-center py-10 text-[12px] text-muted-foreground">No playbooks match your search.</td></tr>
             ) : (
               filtered.map((pb) => (
                 <tr key={pb.id} className="border-b border-border last:border-0 row-highlight">
@@ -257,12 +256,10 @@ export default function Playbooks() {
                       pb.actionClass === 'Class 1' ? 'bg-status-healthy/10 text-status-healthy' : 'bg-status-warning/10 text-status-warning',
                     )}>{pb.actionClass}</span>
                   </td>
-                  <td className="px-4 py-2.5 text-[11px] text-muted-foreground">{pb.estimatedTime}</td>
                   <td className="px-4 py-2.5 font-mono text-[11px] text-foreground tabular-nums">{pb.successRate}%</td>
                   <td className="px-4 py-2.5 font-mono text-[11px] text-muted-foreground tabular-nums">{pb.executionHistory.length}</td>
-                  <td className="px-4 py-2.5 text-[11px] text-muted-foreground">{pb.lastUsed}</td>
                   <td className="px-4 py-2.5">
-                    <button className="text-[11px] text-accent hover:underline" onClick={() => setSelected(pb)}>View detail</button>
+                    <button className="text-[11px] text-accent hover:underline" onClick={() => setSelected(pb)}>View</button>
                   </td>
                 </tr>
               ))
