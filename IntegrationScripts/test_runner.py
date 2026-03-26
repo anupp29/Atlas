@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from log_monitor import LogMonitor, LogSeverity, LogSource, LogMonitorDB
 from github_repo_sync import GitHubRepoSync, GitHubConfig, GitHubRepoSyncDB
 from integration_orchestrator import IntegrationOrchestrator, IntegrationConfig
-from platform_adapters import get_adapter, PLATFORM_ADAPTERS
+from adapters import get_adapter, ADAPTERS
 from platform_integration import PlatformIntegrationManager, load_platforms_config_from_env
 
 
@@ -254,11 +254,11 @@ async def test_platform_integration_manager():
 async def test_all_platform_adapters():
     print("\n[TEST] All platform adapters instantiation...")
     
-    for platform_name in PLATFORM_ADAPTERS.keys():
+    for platform_name in ADAPTERS.keys():
         adapter = get_adapter(platform_name, "TEST_CLIENT", {})
         assert adapter is not None, f"{platform_name} adapter instantiated"
     
-    print(f"✓ All {len(PLATFORM_ADAPTERS)} platform adapters passed")
+    print(f"✓ All {len(ADAPTERS)} platform adapters passed")
 
 
 async def main():

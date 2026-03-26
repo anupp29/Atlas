@@ -1,0 +1,1 @@
+{"log_id": "91f0a120969b41b7", "client_id": "FINCORE_UK_001", "timestamp": "2026-03-26T05:58:26.317444", "source": "nodejs", "severity": "ERROR", "service_name": "APIGateway", "message": "Unhandled rejection", "error_code": "NODE_UNHANDLED_REJECTION", "raw_payload": "UnhandledPromiseRejectionWarning: Error", "metadata": {}}

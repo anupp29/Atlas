@@ -1,0 +1,1 @@
+{"log_id": "918bdb9494bd99e7", "client_id": "TEST_CLIENT", "timestamp": "2026-03-26T05:58:26.258444", "source": "java", "severity": "ERROR", "service_name": "PaymentAPI", "message": "Connection pool exhausted", "error_code": "CONNECTION_POOL_EXHAUSTED", "raw_payload": "[2024-03-26 10:15:23] ERROR HikariPool", "metadata": {"pool_size": 40}}
