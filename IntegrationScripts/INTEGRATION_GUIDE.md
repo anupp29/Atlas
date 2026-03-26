@@ -118,7 +118,77 @@ log_id = await orchestrator.ingest_log(...)
 commit_sha = await orchestrator.update_repository_file(...)
 ```
 
-### 4. integration_api.py
+### 4. platform_adapters.py
+Platform-specific log adapters for multi-cloud and infrastructure monitoring.
+
+**Supported Platforms:**
+- Redis - Memory, clients, eviction metrics
+- Kubernetes - Pod status, restarts, conditions
+- Kafka - Cluster health, broker status, topics
+- Vercel - Deployment status, build state
+- Docker - Container status, memory, CPU
+- Prometheus - Target health, scrape status
+- Elasticsearch - Cluster health, shard status
+- Datadog - Monitor state, alert status
+
+**Features:**
+- Async platform API integration
+- Automatic log parsing and normalization
+- Severity classification per platform
+- Error code mapping to ATLAS taxonomy
+- Metadata extraction and enrichment
+
+**Usage:**
+```python
+from platform_adapters import get_adapter
+
+adapter = get_adapter(
+    platform="redis",
+    client_id="FINCORE_UK_001",
+    config={"host": "localhost", "port": 6379}
+)
+
+logs = await adapter.fetch_logs()
+for raw_log in logs:
+    parsed = adapter.parse_log(raw_log)
+```
+
+### 5. platform_integration.py
+Unified platform integration manager with polling orchestration.
+
+**Features:**
+- Multi-platform concurrent polling
+- Automatic log ingestion from all platforms
+- Configurable poll intervals per platform
+- Graceful error handling and recovery
+- Platform availability reporting
+
+**Environment Variables:**
+- `{PLATFORM}_ENABLED`: Enable platform (true/false)
+- `{PLATFORM}_*`: Platform-specific credentials and config
+- `{PLATFORM}_POLL_INTERVAL`: Poll interval in seconds
+
+**Usage:**
+```python
+from platform_integration import PlatformIntegrationManager
+
+platforms_config = {
+    "redis": {"host": "localhost", "port": 6379, "poll_interval": 30},
+    "kubernetes": {"api_url": "https://k8s.local", "poll_interval": 60},
+    "kafka": {"bootstrap_servers": ["localhost:9092"], "poll_interval": 60}
+}
+
+manager = PlatformIntegrationManager(
+    client_id="FINCORE_UK_001",
+    log_db_path="data/atlas_logs.db",
+    log_dir="data/logs",
+    platforms_config=platforms_config
+)
+
+await manager.start()
+```
+
+### 6. integration_api.py
 FastAPI endpoints for integration operations.
 
 **Endpoints:**
@@ -178,6 +248,82 @@ pr_number INTEGER
 status TEXT NOT NULL
 error_message TEXT
 created_at TEXT NOT NULL
+```
+
+## Platform Adapters Configuration
+
+### Redis
+```python
+config = {
+    "host": "localhost",
+    "port": 6379,
+    "password": None,
+    "poll_interval": 30
+}
+```
+
+### Kubernetes
+```python
+config = {
+    "api_url": "https://kubernetes.default.svc",
+    "namespace": "default",
+    "token": "k8s_token",
+    "poll_interval": 60
+}
+```
+
+### Kafka
+```python
+config = {
+    "bootstrap_servers": ["localhost:9092"],
+    "poll_interval": 60
+}
+```
+
+### Vercel
+```python
+config = {
+    "api_token": "vercel_token",
+    "team_id": "team_id",
+    "project_id": "project_id",
+    "poll_interval": 300
+}
+```
+
+### Docker
+```python
+config = {
+    "socket_path": "/var/run/docker.sock",
+    "poll_interval": 30
+}
+```
+
+### Prometheus
+```python
+config = {
+    "url": "http://localhost:9090",
+    "poll_interval": 60
+}
+```
+
+### Elasticsearch
+```python
+config = {
+    "url": "http://localhost:9200",
+    "username": "elastic",
+    "password": "password",
+    "poll_interval": 60
+}
+```
+
+### Datadog
+```python
+config = {
+    "api_key": "datadog_api_key",
+    "app_key": "datadog_app_key",
+    "site": "datadoghq.com",
+    "poll_interval": 300
+}
 ```
 
 ## Logging
@@ -247,10 +393,50 @@ Log files are written in JSONL format for easy ingestion into:
 
 File path: `{ATLAS_LOG_DIR}/{client_id}_logs_{timestamp}.jsonl`
 
+## Platform Polling
+
+Each platform adapter runs in a separate async task with configurable poll intervals:
+
+```python
+os.environ["REDIS_ENABLED"] = "true"
+os.environ["REDIS_HOST"] = "localhost"
+os.environ["REDIS_PORT"] = "6379"
+os.environ["REDIS_POLL_INTERVAL"] = "30"
+
+os.environ["KUBERNETES_ENABLED"] = "true"
+os.environ["K8S_API_URL"] = "https://kubernetes.default.svc"
+os.environ["K8S_POLL_INTERVAL"] = "60"
+
+os.environ["KAFKA_ENABLED"] = "true"
+os.environ["KAFKA_BOOTSTRAP_SERVERS"] = "localhost:9092"
+os.environ["KAFKA_POLL_INTERVAL"] = "60"
+
+os.environ["VERCEL_ENABLED"] = "true"
+os.environ["VERCEL_API_TOKEN"] = "token"
+os.environ["VERCEL_POLL_INTERVAL"] = "300"
+
+os.environ["DOCKER_ENABLED"] = "true"
+os.environ["DOCKER_SOCKET"] = "/var/run/docker.sock"
+os.environ["DOCKER_POLL_INTERVAL"] = "30"
+
+os.environ["PROMETHEUS_ENABLED"] = "true"
+os.environ["PROMETHEUS_URL"] = "http://localhost:9090"
+os.environ["PROMETHEUS_POLL_INTERVAL"] = "60"
+
+os.environ["ELASTICSEARCH_ENABLED"] = "true"
+os.environ["ELASTICSEARCH_URL"] = "http://localhost:9200"
+os.environ["ELASTICSEARCH_POLL_INTERVAL"] = "60"
+
+os.environ["DATADOG_ENABLED"] = "true"
+os.environ["DATADOG_API_KEY"] = "key"
+os.environ["DATADOG_APP_KEY"] = "key"
+os.environ["DATADOG_POLL_INTERVAL"] = "300"
+```
+
 ## Future Extensions
 
-- Kafka streaming support
-- Elasticsearch direct integration
 - GitLab/Bitbucket support
 - Webhook-based log ingestion
 - Real-time metrics export
+- Custom platform adapter framework
+- Multi-region deployment support
