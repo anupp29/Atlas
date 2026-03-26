@@ -1,0 +1,151 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ATLAS Light — Professional Enterprise */
+    --background: 220 20% 97%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 220 44% 17%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 30%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 211 100% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 211 100% 40%;
+
+    --radius: 0.5rem;
+
+    --status-healthy: 142 72% 35%;
+    --status-warning: 38 92% 50%;
+    --status-critical: 0 84% 55%;
+
+    --sidebar-background: 220 44% 17%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 211 100% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 38% 24%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 220 38% 22%;
+    --sidebar-ring: 211 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.006em;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'IBM Plex Mono', 'Menlo', monospace;
+  }
+
+  table {
+    border-collapse: collapse;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Pipeline pulse */
+@keyframes atlas-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.atlas-pulse {
+  animation: atlas-pulse 2s ease-in-out infinite;
+}
+
+/* Live dot blink */
+@keyframes live-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.live-dot {
+  animation: live-blink 1.5s ease-in-out infinite;
+}
+
+/* Row highlight */
+.row-highlight {
+  transition: background-color 120ms ease;
+}
+.row-highlight:hover {
+  background-color: hsl(var(--muted) / 0.5);
+}
+
+/* Glow effects for status */
+.glow-critical {
+  box-shadow: 0 0 8px hsl(var(--status-critical) / 0.2);
+}
+.glow-warning {
+  box-shadow: 0 0 6px hsl(var(--status-warning) / 0.15);
+}
+.glow-healthy {
+  box-shadow: 0 0 6px hsl(var(--status-healthy) / 0.1);
+}
+
+/* Step connector */
+.step-connector::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 28px;
+  bottom: 0;
+  width: 2px;
+  background: hsl(var(--border));
+}
