@@ -50,9 +50,18 @@ export default function Login() {
       <div className="hidden lg:flex lg:w-[480px] bg-primary flex-col justify-between p-10">
         <div>
           <div className="flex items-center gap-3 mb-8">
-            <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center">
-              <Shield className="h-5 w-5 text-accent-foreground" />
-            </div>
+            <svg className="h-10 w-10" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="36" height="36" rx="8" fill="#7B61FF"/>
+              <path d="M18 8 L28 28 L18 24 L8 28 Z" fill="url(#atlasLoginGrad)" opacity="0.95"/>
+              <path d="M18 10 L24 24 L18 21 L12 24 Z" fill="#0A0E17"/>
+              <circle cx="18" cy="16" r="3" fill="#00D4FF"/>
+              <defs>
+                <linearGradient id="atlasLoginGrad" x1="18" y1="8" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#00D4FF"/>
+                  <stop offset="1" stop-color="#7B61FF"/>
+                </linearGradient>
+              </defs>
+            </svg>
             <div>
               <h1 className="text-[20px] font-bold tracking-[0.2em] text-primary-foreground">ATLAS</h1>
               <p className="text-[10px] text-primary-foreground/50 tracking-[0.1em] uppercase">AIOps Platform</p>

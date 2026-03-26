@@ -2,6 +2,8 @@
 
 Specialist detection agents. One agent type per technology domain. Each agent is a long-lived singleton per client, running continuously in the background monitoring loop.
 
+The platform is designed to support any number of agent types across any technology stack. Current agents cover Java, PostgreSQL, Node.js, and Redis. New agents extend `base_agent.py` and plug in without changes to the core platform — the architecture scales to any service type, language runtime, or infrastructure component.
+
 ---
 
 ## Files
@@ -13,7 +15,7 @@ Specialist detection agents. One agent type per technology domain. Each agent is
 | `postgres_agent.py` | Monitors PostgreSQL. Detects connection pool exhaustion, deadlocks, and FATAL errors via SQLSTATE codes. |
 | `nodejs_agent.py` | Monitors Node.js services. Detects unhandled rejection spikes and downstream connection refusals. |
 | `redis_agent.py` | Monitors Redis. Detects OOM, rejected commands, and memory threshold breaches. Alert threshold is 85% memory, not 3 sigma, because Redis memory is bounded. |
-| `correlation_engine.py` | Sits above all four agents. 90-second window per client. Classifies incidents as CASCADE or ISOLATED using Neo4j structural confirmation. Runs early warning scan on blast-radius services. |
+| `correlation_engine.py` | Sits above all active agents. 90-second window per client. Classifies incidents as CASCADE or ISOLATED using Neo4j structural confirmation. Runs early warning scan on blast-radius services. |
 
 ---
 

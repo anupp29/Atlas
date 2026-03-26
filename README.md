@@ -1,4 +1,4 @@
-﻿# ATLAS
+# ATLAS
 
 Autonomous Telemetry and Log Analysis System. A multi-agent AIOps platform built for managed service providers.
 
@@ -14,11 +14,12 @@ Five flows drive everything:
 DETECT -> CORRELATE -> DECIDE -> ACT -> LEARN
 ```
 
-- Specialist agents monitor Java, PostgreSQL, Node.js, and Redis services continuously
+- Configurable specialist agents monitor any technology stack continuously — Java, Python, Node.js, PostgreSQL, Redis, MongoDB, Kafka, Kubernetes, and beyond. New agent types plug in without touching the core platform.
 - A 7-node LangGraph orchestrator correlates signals, queries Neo4j, searches ChromaDB, and calls an LLM
 - A pure-Python confidence engine scores every decision and checks 8 hard vetoes before acting
 - Pre-approved playbooks execute with pre-validation, success monitoring, and auto-rollback
 - Every outcome feeds back into the confidence engine and trust progression model
+- Multi-tenant by design — serves any number of clients simultaneously, each with independent configuration, compliance rules, trust levels, and data isolation
 
 ---
 

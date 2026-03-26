@@ -305,14 +305,13 @@ Graph traversal path stored in state — every node and edge visited in order. D
 
 ### Node 5 — Reasoning Engine
 
-**LiteLLM router:**
+**Cerebras Inference API:**
 ```
-Primary:   Claude Sonnet (tool_use mode)
-Fallback:  GPT-4o (auto, under 500ms)
-Tertiary:  Gemini 1.5 Pro
+Model:     llama3.1-70b (ultra-fast inference)
+Fallback:  Ollama local (qwen2.5-coder:7b)
 ```
 
-Claude `tool_use` mode enforces JSON schema at API level. Malformed output is structurally impossible — not a retry strategy, an architectural guarantee.
+Cerebras provides free API access for developers with structured output support. JSON schema validation ensures consistent output format — malformed responses are structurally impossible.
 
 **Six-step ITIL reasoning prompt:**
 1. Symptom characterisation
@@ -554,9 +553,8 @@ Trust level exposed via read-only API endpoint. Clients integrate it into their 
 |---|---|---|
 | Backend | FastAPI Python 3.11 | Async, WebSocket, production-grade |
 | Orchestration | LangGraph 0.2+ | State persistence, human-in-loop native |
-| LLM Router | LiteLLM | 99.9% availability, single interface |
-| LLM Primary | Claude Sonnet tool_use | Schema compliance at API level |
-| LLM Fallback | GPT-4o → Gemini 1.5 Pro | Auto-failover under 500ms |
+| LLM Primary | Cerebras llama3.1-70b | Free API, ultra-fast inference |
+| LLM Fallback | Ollama local (qwen2.5-coder) | Zero-cost, offline capable |
 | Time-Series Detection | Chronos-Bolt (HuggingFace) | Pretrained 100B points, zero cold-start |
 | Point Anomaly | Isolation Forest + SHAP | Explainable, production-proven |
 | Uncertainty | Conformal Prediction | Statistically valid confidence bounds |

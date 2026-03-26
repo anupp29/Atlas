@@ -38,9 +38,18 @@ export function AppSidebar() {
       {/* Wordmark */}
       <div className="px-5 pt-5 pb-5">
         <div className="flex items-center gap-2.5">
-          <div className="h-9 w-9 rounded-lg bg-accent flex items-center justify-center">
-            <Shield className="h-4.5 w-4.5 text-accent-foreground" />
-          </div>
+          <svg className="h-9 w-9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="36" height="36" rx="8" fill="#7B61FF"/>
+            <path d="M18 8 L28 28 L18 24 L8 28 Z" fill="url(#atlasGrad)" opacity="0.95"/>
+            <path d="M18 10 L24 24 L18 21 L12 24 Z" fill="#0A0E17"/>
+            <circle cx="18" cy="16" r="3" fill="#00D4FF"/>
+            <defs>
+              <linearGradient id="atlasGrad" x1="18" y1="8" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#00D4FF"/>
+                <stop offset="1" stop-color="#7B61FF"/>
+              </linearGradient>
+            </defs>
+          </svg>
           <div>
             <h1 className="text-[15px] font-bold tracking-[0.15em] leading-none text-primary-foreground">ATLAS</h1>
             <p className="text-[9px] text-primary-foreground/40 mt-0.5 tracking-[0.08em] uppercase">AIOps Platform</p>

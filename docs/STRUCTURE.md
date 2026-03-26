@@ -18,9 +18,8 @@
 **Purpose:** Template showing every environment variable the system needs. Nobody commits real credentials. This file is committed. The real `.env` is not.
 
 **Must contain entries for:**
-- Anthropic API key
-- OpenAI API key (LiteLLM fallback)
-- Google API key (Gemini tertiary fallback)
+- Cerebras API key
+- Ollama base URL
 - Neo4j connection URI, username, password
 - ServiceNow developer instance URL, username, password, client ID
 - Slack webhook URL for approval notifications
@@ -39,10 +38,11 @@
 
 **Must include:**
 - fastapi, uvicorn, websockets
-- langgraph, langchain-anthropic, langchain-openai, litellm
+- langgraph
 - neo4j (official Python driver)
 - chromadb
-- anthropic
+- cerebras (LLM API)
+- ollama (local LLM)
 - chronos-forecasting (HuggingFace)
 - scikit-learn, shap, torch
 - numpy, pandas
@@ -547,8 +547,8 @@
 
 **Responsibilities:**
 - Assemble the complete reasoning prompt: current evidence summary, blast radius, deployment correlations, historical matches (client-specific first, cross-client second), client compliance profile, ITIL 6-step reasoning instruction
-- Route the call through LiteLLM: Claude Sonnet primary, GPT-4o fallback, Gemini 1.5 Pro tertiary
-- Use Claude tool_use mode to enforce the output schema at the API level
+- Route the call through Cerebras: Qwen3-235B primary, Ollama local fallback
+- Use structured JSON output to enforce the schema at the API level
 - Load pre-computed fallback response from `/data/fallbacks/{client_id}_incident_response.json` if the live call exceeds 8 seconds or fails after retries
 - Parse the structured JSON output and validate every required field is present before writing to state
 - Required output fields: root_cause (string), confidence_factors (dict), recommended_action_id (string matching a playbook in the library), alternative_hypotheses (list with evidence_for and evidence_against for each), explanation_for_engineer (string, written at L2 level), technical_evidence_summary (string)
@@ -556,8 +556,8 @@
 **Guardrails:**
 - The recommended_action_id must be validated against the actual playbook library — if the LLM returns an action ID that does not exist in the library, the output is rejected and the fallback is used
 - Maximum prompt length enforced — if the assembled context exceeds the model's context window, the least-recent historical matches are dropped first, then cross-client results, then graph results are summarised — never truncate the current evidence
-- All three fallback models must be tested and confirmed working before demo day — failure of the primary does not mean failure of the demo
-- If all three LLM calls fail and no fallback exists: route directly to HUMAN_REVIEW with the raw evidence, with a flag `llm_unavailable: true` — the incident is never dropped because the LLM is down
+- Both LLM models must be tested and confirmed working before demo day — failure of the primary does not mean failure of the demo
+- If both LLM calls fail and no fallback exists: route directly to HUMAN_REVIEW with the raw evidence, with a flag `llm_unavailable: true` — the incident is never dropped because the LLM is down
 - The explanation_for_engineer field must be validated for length — if it is less than 50 characters, the output is rejected as likely truncated
 
 ---
@@ -940,10 +940,10 @@
 ---
 
 ### `/data/fallbacks/financecore_incident_response.json`
-**Purpose:** Pre-computed Claude API response for the FinanceCore demo scenario. Used as fallback if the live LLM call fails or exceeds 8 seconds.
+**Purpose:** Pre-computed LLM response for the FinanceCore demo scenario. Used as fallback if the live LLM call fails or exceeds 8 seconds.
 
 **Must contain:**
-- A real Claude tool_use response captured from a real API call during development
+- A real LLM response captured from a real API call during development
 - All required fields: root_cause, confidence_factors, recommended_action_id (must be connection-pool-recovery-v2), alternative_hypotheses with evidence, explanation_for_engineer
 - The explanation_for_engineer must be written at L2 engineer level — readable, specific, actionable
 
@@ -1100,16 +1100,16 @@
 ---
 
 ### `/scripts/seed_chromadb.py`
-**Purpose:** One-time setup script. Reads historical_incidents.json and creates real embeddings using the Claude API, then stores them in ChromaDB.
+**Purpose:** One-time setup script. Reads historical_incidents.json and creates embeddings using a local embedding model, then stores them in ChromaDB.
 
 **Responsibilities:**
 - Connect to ChromaDB
 - Create collections for FinanceCore and RetailMax if they do not exist
-- For each incident in historical_incidents.json: call the Claude embeddings API to generate a real embedding, store in the correct collection with all metadata fields
+- For each incident in historical_incidents.json: generate embedding using local model, store in the correct collection with all metadata fields
 - After seeding: run the similarity validation test for both clients and print the results
 
 **Guardrails:**
-- Embedding API calls must be rate-limited — add a small delay between calls to avoid hitting API rate limits
+- Embedding generation must be rate-limited — add a small delay between calls if needed
 - If any embedding call fails: retry once, then skip and log the skipped incident — do not fail the entire seeding process for one bad embedding
 
 ---
