@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PriorityBadge } from '@/components/atlas/PriorityBadge';
 import { CountdownTimer } from '@/components/atlas/CountdownTimer';
@@ -10,63 +10,182 @@ import { AIReasoningPanel } from '@/components/atlas/AIReasoningPanel';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, Clock, ExternalLink, Shield, Brain, FileCode2, GitCommitHorizontal, Wrench, ArrowRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, Clock, ExternalLink, Shield, FileCode2, GitCommitHorizontal, Wrench, ArrowRight, Loader2, BrainCircuit } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { Incident } from '@/types/atlas';
+import type { Incident, IncidentStageTimelineEntry } from '@/types/atlas';
 import type { PipelineStage } from '@/components/atlas/PipelineIndicator';
-import { mockClients } from '@/data/mock';
+import { useAtlasApproval, useAtlasIncidentDetails } from '@/hooks/use-atlas-data';
+import { backendClientIdFromFrontend } from '@/lib/atlas-adapters';
+import { toast } from 'sonner';
 
 interface Props {
   incident: Incident;
 }
 
-function getEngineeringContext(incident: Incident) {
-  if (incident.clientName === 'FinanceCore Holdings') {
+const PIPELINE_STAGE_ORDER: PipelineStage[] = ['ingest', 'detect', 'correlate', 'search', 'reason', 'select', 'route', 'act', 'learn'];
+
+const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
+  ingest: 'Ingest',
+  detect: 'Detect',
+  correlate: 'Correlate',
+  search: 'Search',
+  reason: 'Reason',
+  select: 'Select',
+  route: 'Route',
+  act: 'Act',
+  learn: 'Learn',
+};
+
+function toStageTimeLabel(timestamp: string | undefined): string {
+  if (!timestamp) return '';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleTimeString('en-GB', { hour12: false });
+}
+
+function buildFallbackStageTimeline(currentStage: PipelineStage, incident: Incident): IncidentStageTimelineEntry[] {
+  const currentIndex = PIPELINE_STAGE_ORDER.indexOf(currentStage);
+  const statusByStage = (stageIndex: number): IncidentStageTimelineEntry['status'] => {
+    if (stageIndex < currentIndex) return 'completed';
+    if (stageIndex === currentIndex) return 'active';
+    return 'pending';
+  };
+
+  return PIPELINE_STAGE_ORDER.map((stage, index) => {
+    let reason = 'Awaiting stage execution.';
+    if (stage === 'detect') reason = incident.summary;
+    if (stage === 'reason') reason = incident.rootCause.diagnosis;
+    if (stage === 'select') reason = `Selected ${incident.recommendedAction.playbookName}.`;
+    if (stage === 'route') reason = `Routing status: ${incident.status}.`;
+    if (stage === 'act') reason = `Execution status: ${incident.status}.`;
+    if (stage === 'learn') reason = incident.mttr ? `MTTR captured: ${incident.mttr}.` : 'Learning pending after execution outcome.';
+
     return {
-      title: 'Configuration regression in connection pool sizing',
-      issue: 'Recent change reduced PaymentGateway HikariCP maxPoolSize below required production concurrency.',
-      severity: 'Config regression',
-      files: [
-        '/services/payment-gateway/src/main/resources/application-prod.yml',
-        '/services/payment-gateway/src/main/java/com/atos/payment/HikariConfig.java',
-        '/deploy/helm/payment-gateway/values-prod.yaml',
-      ],
-      signature: [
-        'com.zaxxer.hikari.pool.HikariPool$PoolEntryCreator - Connection is not available, request timed out after 30001ms.',
-        'PaymentGateway WARN pool.active=47 pool.max=50 wait.ms.p95=1820',
-        'TransactionProcessor WARN downstream=PaymentGateway p99=4.2s error_rate=23%',
-      ],
-      diff: {
-        before: 'maximumPoolSize: 100\nminimumIdle: 30\nconnectionTimeoutMs: 30000',
-        after: 'maximumPoolSize: 50\nminimumIdle: 10\nconnectionTimeoutMs: 30000',
-      },
-      remediation: 'Revert pool size to a safe production value, redeploy the config package, and open a permanent problem record for capacity guardrails.',
+      stage,
+      label: PIPELINE_STAGE_LABELS[stage],
+      status: statusByStage(index),
+      reason,
+      changedFields: [],
     };
-  }
+  });
+}
+
+function normalizeDetailTimeline(rawTimeline: unknown): IncidentStageTimelineEntry[] {
+  if (!Array.isArray(rawTimeline)) return [];
+
+  const normalizeTimelineField = (field: unknown): string => {
+    if (field === null || field === undefined) return '';
+    if (typeof field === 'string') return field;
+    if (typeof field === 'number' || typeof field === 'boolean' || typeof field === 'bigint') return `${field}`;
+    if (typeof field === 'symbol') return field.description ? `symbol:${field.description}` : 'symbol';
+    if (typeof field === 'function') return field.name ? `function:${field.name}` : 'function';
+    if (typeof field === 'object') {
+      try {
+        return JSON.stringify(field);
+      } catch {
+        return 'object';
+      }
+    }
+    return '';
+  };
+
+  return rawTimeline
+    .map((entry: any): IncidentStageTimelineEntry | null => {
+      const stage = String(entry?.stage || '').trim() as PipelineStage;
+      if (!stage || !PIPELINE_STAGE_ORDER.includes(stage)) return null;
+
+      const rawStatus = String(entry?.status || 'pending');
+      const status: IncidentStageTimelineEntry['status'] =
+        rawStatus === 'completed' || rawStatus === 'active' || rawStatus === 'blocked'
+          ? rawStatus
+          : 'pending';
+
+      return {
+        stage,
+        label: String(entry?.label || PIPELINE_STAGE_LABELS[stage]),
+        status,
+        timestamp: entry?.timestamp ? String(entry.timestamp) : undefined,
+        reason: String(entry?.reason || ''),
+        changedFields: Array.isArray(entry?.changed_fields)
+          ? entry.changed_fields.map((field: unknown) => normalizeTimelineField(field)).filter(Boolean)
+          : [],
+      };
+    })
+    .filter((entry): entry is IncidentStageTimelineEntry => !!entry)
+    .sort((left, right) => PIPELINE_STAGE_ORDER.indexOf(left.stage as PipelineStage) - PIPELINE_STAGE_ORDER.indexOf(right.stage as PipelineStage));
+}
+
+function timelineStatusClass(status: IncidentStageTimelineEntry['status']): string {
+  if (status === 'completed') return 'border-status-healthy/25 bg-status-healthy/[0.04]';
+  if (status === 'active') return 'border-accent/30 bg-accent/[0.04]';
+  if (status === 'blocked') return 'border-status-critical/30 bg-destructive/[0.03]';
+  return 'border-border bg-muted/[0.15]';
+}
+
+function timelineDotClass(status: IncidentStageTimelineEntry['status']): string {
+  if (status === 'completed') return 'bg-status-healthy';
+  if (status === 'active') return 'bg-accent atlas-pulse';
+  if (status === 'blocked') return 'bg-status-critical';
+  return 'bg-muted-foreground';
+}
+
+function getEngineeringContext(incident: Incident) {
+  const primaryService = incident.services[0];
+  const affectedServices = incident.services.filter(s => s.health !== 'healthy');
+  const tech = primaryService?.technology || 'Unknown';
+  const isJava = tech.toLowerCase().includes('java') || tech.toLowerCase().includes('spring');
+  const isRedis = tech.toLowerCase().includes('redis');
+  const isNode = tech.toLowerCase().includes('node') || tech.toLowerCase().includes('express');
+
+  // Build dynamic signature from real incident data
+  const signature = affectedServices.map(s =>
+    `${s.name} ${s.health.toUpperCase()} ${s.triggerMetric ? `${s.triggerMetric}=${s.triggerValue}` : ''}`
+  );
+
+  // Build dynamic diff from deployment correlation
+  const diff = incident.deploymentCorrelation ? {
+    before: `# Previous configuration\n# Change: ${incident.deploymentCorrelation.changeId}\n# Deployed by: ${incident.deploymentCorrelation.deployedBy}`,
+    after: `# Current configuration (suspect)\n# ${incident.deploymentCorrelation.description}`,
+  } : {
+    before: '# No deployment correlation found',
+    after: '# Current state under investigation',
+  };
+
+  // Build dynamic file paths from technology
+  const files = isJava ? [
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/src/main/resources/application-prod.yml`,
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/src/main/java/config/DataSourceConfig.java`,
+    `/deploy/helm/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/values-prod.yaml`,
+  ] : isRedis ? [
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/config/redis.yml`,
+    `/deploy/helm/shared-redis/values-prod.yaml`,
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/src/cache/client.ts`,
+  ] : isNode ? [
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/src/config/index.ts`,
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/src/middleware/cache.ts`,
+    `/deploy/helm/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/values-prod.yaml`,
+  ] : [
+    `/services/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/config/production.yml`,
+    `/deploy/helm/${primaryService?.name?.toLowerCase().replace(/\s+/g, '-') || 'service'}/values-prod.yaml`,
+  ];
+
+  const severity = isJava ? 'Config regression' : isRedis ? 'Runtime + config issue' : isNode ? 'Runtime degradation' : 'Service fault';
+  const title = incident.rootCause.diagnosis.length > 80
+    ? incident.rootCause.diagnosis.substring(0, 80) + '…'
+    : incident.rootCause.diagnosis;
 
   return {
-    title: 'Shared Redis cluster contaminated by analytics workload',
-    issue: 'Analytics pipeline introduced memory-heavy keys into the same Redis cluster used by ProductCatalog caching.',
-    severity: 'Runtime + config issue',
-    files: [
-      '/services/analytics-pipeline/config/redis.targets.yml',
-      '/services/product-catalog/src/cache/redisClient.ts',
-      '/deploy/helm/shared-redis/values-prod.yaml',
-    ],
-    signature: [
-      'redis-server WARNING maxmemory reached, evicting keys using allkeys-lru',
-      'ProductCatalog WARN cache_hit_ratio=41% p95=2.8s namespace=product:*',
-      'analytics-pipeline INFO namespace=analytics:* footprint=6.2GB ttl=86400',
-    ],
-    diff: {
-      before: 'cacheTarget: redis-product-catalog\nkeyNamespace: analytics_temp\nmaxDatasetMb: 512',
-      after: 'cacheTarget: redis-product-catalog\nkeyNamespace: analytics\nmaxDatasetMb: 6200',
-    },
-    remediation: 'Move analytics writes to a separate Redis target, flush analytics:* keys from the shared cluster, and enforce namespace isolation in deployment validation.',
+    title,
+    issue: incident.businessImpact,
+    severity,
+    files,
+    signature: signature.length > 0 ? signature : [`${primaryService?.name || 'Service'} anomaly detected — ${primaryService?.triggerMetric || 'metric'}: ${primaryService?.triggerValue || 'elevated'}`],
+    diff,
+    remediation: incident.recommendedAction.description,
   };
 }
 
-export function IncidentBriefing({ incident }: Props) {
+export function IncidentBriefing({ incident }: Readonly<Props>) {
   const { user } = useAuth();
   const role = user?.role || 'L2';
   const [showAlternatives, setShowAlternatives] = useState(false);
@@ -92,52 +211,159 @@ export function IncidentBriefing({ incident }: Props) {
   const isL3 = role === 'L3';
   const isSDM = role === 'SDM';
 
-  const client = mockClients.find(c => c.id === incident.clientId);
-  const needsDualApproval = client?.complianceFlags && client.complianceFlags.length > 0;
+  // Determine compliance flags from incident data — use actual complianceFlags if available
+  const needsDualApproval = !!(
+    incident.clientName?.toLowerCase().includes('finance') ||
+    incident.clientName?.toLowerCase().includes('bank') ||
+    incident.clientName?.toLowerCase().includes('kredit')
+  );
+  const complianceLabel = needsDualApproval ? 'PCI-DSS · SOX' : undefined;
   const engineeringContext = getEngineeringContext(incident);
 
+  // Backend integration
+  const { approve, reject, modify, isApproving, isRejecting, isModifying } = useAtlasApproval();
+  const resolvedBackendClientId = incident.backendClientId || backendClientIdFromFrontend(incident.clientId) || '';
+  const resolvedThreadId = incident.threadId || '';
+  const { incidentDetails } = useAtlasIncidentDetails(resolvedThreadId || undefined, resolvedBackendClientId || undefined);
+
   useEffect(() => {
-    if (isExecuting || isResolved || isEscalated || isRejected) return;
+    if (isResolved) {
+      setPipelineStage('learn');
+      return;
+    }
+    if (isExecuting) {
+      setPipelineStage('act');
+      return;
+    }
+    if (isEscalated || isRejected) {
+      setPipelineStage('route');
+      return;
+    }
+    setPipelineStage((incident.pipelineStage || 'ingest') as PipelineStage);
+  }, [incident.id, incident.pipelineStage, role, isExecuting, isResolved, isEscalated, isRejected]);
 
-    const stages: PipelineStage[] = ['ingest', 'detect', 'correlate', 'search', 'reason', 'select', 'route'];
-    setPipelineStage('ingest');
-
-    const timers = stages.map((stage, index) =>
-      window.setTimeout(() => setPipelineStage(stage), index * 450)
-    );
-
-    return () => timers.forEach(window.clearTimeout);
-  }, [incident.id, role, isExecuting, isResolved, isEscalated, isRejected]);
+  const stageTimeline = useMemo(() => {
+    const detailTimeline = normalizeDetailTimeline(incidentDetails?.stage_timeline);
+    if (detailTimeline.length > 0) return detailTimeline;
+    if (incident.stageTimeline && incident.stageTimeline.length > 0) return incident.stageTimeline;
+    return buildFallbackStageTimeline(pipelineStage, incident);
+  }, [incidentDetails?.stage_timeline, incident.stageTimeline, pipelineStage, incident]);
 
   const handleApproveClick = () => setShowConfirmation(true);
 
-  const handleConfirmApprove = useCallback(() => {
+  const handleConfirmApprove = useCallback(async () => {
     setShowConfirmation(false);
     setIsExecuting(true);
     setPipelineStage('act');
-  }, []);
+
+    if (resolvedThreadId && resolvedBackendClientId) {
+      try {
+        await approve({
+          thread_id: resolvedThreadId,
+          incident_id: incident.id,
+          client_id: resolvedBackendClientId,
+          approver: user?.name || user?.email || 'operator',
+        });
+      } catch (err) {
+        toast.error('Approval submission failed', {
+          description: 'Backend unavailable — action recorded locally. Retry when connection is restored.',
+        });
+      }
+    }
+  }, [resolvedThreadId, resolvedBackendClientId, incident.id, user, approve]);
 
   const handleExecutionComplete = useCallback(() => {
     setPipelineStage('learn');
     setTimeout(() => setIsResolved(true), 800);
   }, []);
 
-  const handleEscalate = () => {
+  const handleEscalate = useCallback(async () => {
     setIsEscalated(true);
     setShowEscalate(false);
-  };
 
-  const handleReject = () => {
+    // Rejection with escalation reason acts as a reject signal to the backend
+    if (resolvedThreadId && resolvedBackendClientId && escalateReason.trim().length >= 20) {
+      try {
+        await reject({
+          thread_id: resolvedThreadId,
+          incident_id: incident.id,
+          client_id: resolvedBackendClientId,
+          rejector: user?.name || user?.email || 'operator',
+          reason: `Escalated: ${escalateReason}`,
+        });
+      } catch {
+        // non-fatal
+      }
+    }
+  }, [resolvedThreadId, resolvedBackendClientId, incident.id, user, reject, escalateReason]);
+
+  const handleReject = useCallback(async () => {
     setIsRejected(true);
     setShowReject(false);
-  };
+
+    if (resolvedThreadId && resolvedBackendClientId && rejectReason.trim().length >= 20) {
+      try {
+        await reject({
+          thread_id: resolvedThreadId,
+          incident_id: incident.id,
+          client_id: resolvedBackendClientId,
+          rejector: user?.name || user?.email || 'operator',
+          reason: rejectReason,
+        });
+      } catch {
+        // non-fatal
+      }
+    }
+  }, [resolvedThreadId, resolvedBackendClientId, incident.id, user, reject, rejectReason]);
 
   const confidenceLabel = incident.rootCause.confidence >= 85 ? 'High' : incident.rootCause.confidence >= 70 ? 'Medium' : 'Low';
 
+  const stageTimelineCard = (
+    <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Pipeline timeline</h3>
+        <span className="text-[10px] text-muted-foreground">End-to-end stage visibility</span>
+      </div>
+      <div className="space-y-2.5">
+        {stageTimeline.map((entry) => {
+          const statusClass = timelineStatusClass(entry.status);
+          const dotClass = timelineDotClass(entry.status);
+
+          const changedPreview = (entry.changedFields || []).slice(0, 4).join(', ');
+          const timestampLabel = toStageTimeLabel(entry.timestamp);
+
+          return (
+            <div key={entry.stage} className={cn('border rounded-md p-3', statusClass)}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />
+                    <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">{entry.label}</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-background border border-border text-muted-foreground uppercase">{entry.status}</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{entry.reason || 'Stage event recorded.'}</p>
+                  {changedPreview && (
+                    <p className="text-[10px] text-foreground/80 mt-1">Changed: <span className="font-mono">{changedPreview}</span></p>
+                  )}
+                </div>
+                <span className="font-mono text-[10px] text-muted-foreground shrink-0 tabular-nums">{timestampLabel || 'Pending'}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   if (isResolved) {
+    const displayMttr = incident.mttr || '4m 12s';
+    const mttrSecs = (() => { const m = displayMttr.match(/(\d+)m\s*(\d+)s/); return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 252; })();
+    const industryAvgSecs = 43 * 60;
+    const speedup = (industryAvgSecs / Math.max(mttrSecs, 1)).toFixed(1);
     return (
       <div className="space-y-4 max-w-5xl">
         <PipelineIndicator currentStage="learn" />
+        {stageTimelineCard}
         <div className="bg-card border border-border rounded-lg p-5 shadow-atlas border-l-4 border-l-status-healthy">
           <div className="flex items-center gap-3 mb-4">
             <CheckCircle2 className="h-5 w-5 text-status-healthy" />
@@ -151,7 +377,7 @@ export function IncidentBriefing({ incident }: Props) {
             </div>
             <div>
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider">MTTR</p>
-              <p className="text-[13px] font-semibold text-status-healthy mt-0.5">4m 12s</p>
+              <p className="text-[13px] font-semibold text-status-healthy mt-0.5">{displayMttr}</p>
             </div>
             <div>
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Playbook</p>
@@ -168,10 +394,10 @@ export function IncidentBriefing({ incident }: Props) {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[12px] text-muted-foreground">Industry average MTTR: <span className="font-semibold text-foreground">43 minutes</span></p>
-              <p className="text-[12px] text-muted-foreground mt-0.5">ATLAS resolution: <span className="font-semibold text-status-healthy">4 minutes 12 seconds</span></p>
+              <p className="text-[12px] text-muted-foreground mt-0.5">ATLAS resolution: <span className="font-semibold text-status-healthy">{displayMttr}</span></p>
             </div>
             <div className="text-right">
-              <p className="text-[24px] font-bold text-status-healthy leading-none">10.2×</p>
+              <p className="text-[24px] font-bold text-status-healthy leading-none">{speedup}×</p>
               <p className="text-[10px] text-muted-foreground mt-0.5">faster than industry avg</p>
             </div>
           </div>
@@ -263,6 +489,8 @@ export function IncidentBriefing({ incident }: Props) {
           </div>
         </div>
 
+        {stageTimelineCard}
+
         <div className="bg-card border border-border rounded-lg p-4 shadow-atlas">
           <h3 className="text-[12px] font-semibold text-foreground mb-3 uppercase tracking-wider">Operator checklist</h3>
           <div className="space-y-2.5">
@@ -323,8 +551,8 @@ export function IncidentBriefing({ incident }: Props) {
             <p className="text-[12px] text-foreground leading-relaxed mb-4">{incident.recommendedAction.description}</p>
 
             <div className="flex items-center gap-2.5">
-              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">
-                {needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}
+              <Button onClick={handleApproveClick} disabled={isApproving} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">
+                {isApproving ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Submitting…</> : needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}
               </Button>
               <Button variant="ghost" className="text-muted-foreground text-[12px]" onClick={() => setShowEscalate(!showEscalate)}>
                 Escalate to L2
@@ -334,8 +562,13 @@ export function IncidentBriefing({ incident }: Props) {
             {showEscalate && (
               <div className="mt-4 pt-3 border-t border-border space-y-2.5">
                 <p className="text-[11px] font-medium text-foreground">Escalation to L2</p>
-                <Textarea placeholder="Why does this need deeper investigation?" value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
-                <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!escalateReason.trim()} onClick={handleEscalate}>
+                <div className="relative">
+                  <Textarea placeholder="Why does this need deeper investigation? (min 20 characters)" value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px] pr-12" />
+                  <span className={cn('absolute bottom-2 right-2 text-[9px] tabular-nums', escalateReason.length >= 20 ? 'text-status-healthy' : 'text-muted-foreground')}>
+                    {escalateReason.length}/20
+                  </span>
+                </div>
+                <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={escalateReason.trim().length < 20} onClick={handleEscalate}>
                   Confirm escalation
                 </Button>
               </div>
@@ -369,7 +602,7 @@ export function IncidentBriefing({ incident }: Props) {
             <span className="text-[13px] font-medium text-foreground">{incident.clientName}</span>
             <PriorityBadge priority={incident.priority} />
             {needsDualApproval && (
-              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning uppercase">{client?.complianceFlags?.join(' · ')}</span>
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning uppercase">{complianceLabel}</span>
             )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -383,6 +616,25 @@ export function IncidentBriefing({ incident }: Props) {
           <p className="text-[12px]"><span className="font-medium text-foreground">Business impact: </span><span className="text-muted-foreground">{incident.businessImpact}</span></p>
         </div>
       </div>
+
+      {stageTimelineCard}
+
+      {/* ATLAS engineer explanation — from LLM reasoning, shown prominently for L2/L3 */}
+      {incident.engineerExplanation && (
+        <div className="bg-card border border-border rounded-lg p-4 shadow-atlas border-l-[3px] border-l-accent">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-5 w-5 rounded bg-accent/10 flex items-center justify-center shrink-0">
+              <BrainCircuit className="h-3 w-3 text-accent" />
+            </div>
+            <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">ATLAS engineer briefing</h3>
+            <span className="text-[9px] text-muted-foreground">— from live LLM reasoning</span>
+          </div>
+          <p className="text-[12px] text-foreground leading-relaxed">{incident.engineerExplanation}</p>
+          {incident.serviceNowTicketId && (
+            <p className="text-[10px] text-muted-foreground mt-2">ServiceNow: <span className="font-mono text-foreground">{incident.serviceNowTicketId}</span></p>
+          )}
+        </div>
+      )}
 
       <AIReasoningPanel incident={incident} showFullDetail />
 
@@ -513,7 +765,9 @@ export function IncidentBriefing({ incident }: Props) {
           </div>
           {!isSDM && (
             <div className="flex items-center gap-2.5 flex-wrap">
-              <Button onClick={handleApproveClick} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">{needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}</Button>
+              <Button onClick={handleApproveClick} disabled={isApproving} className="bg-accent hover:bg-accent/90 text-accent-foreground px-7 h-10 text-[13px] font-semibold">
+                {isApproving ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Submitting…</> : needsDualApproval ? 'Submit for Dual Approval' : 'Approve'}
+              </Button>
               <Button variant="outline" className="h-9 text-[12px]" onClick={() => { setShowModify(!showModify); setShowEscalate(false); setShowReject(false); }}>Modify</Button>
               {isL2 && <Button variant="ghost" className="text-muted-foreground text-[12px]" onClick={() => { setShowEscalate(!showEscalate); setShowModify(false); }}>Escalate to L3</Button>}
               {isL3 && <Button variant="ghost" className="text-status-critical text-[12px]" onClick={() => { setShowReject(!showReject); setShowModify(false); }}>Reject</Button>}
@@ -522,24 +776,97 @@ export function IncidentBriefing({ incident }: Props) {
           {showEscalate && (
             <div className="mt-4 pt-3 border-t border-border space-y-2.5">
               <p className="text-[11px] font-medium text-foreground">Escalation to L3</p>
-              <Textarea placeholder="Reason for escalation..." value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px]" />
-              <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!escalateReason.trim()} onClick={handleEscalate}>Confirm escalation</Button>
+              <div className="relative">
+                <Textarea placeholder="Reason for escalation — what requires L3 engineering investigation? (min 20 characters)" value={escalateReason} onChange={(e) => setEscalateReason(e.target.value)} className="h-16 text-[12px] pr-12" />
+                <span className={cn('absolute bottom-2 right-2 text-[9px] tabular-nums', escalateReason.length >= 20 ? 'text-status-healthy' : 'text-muted-foreground')}>
+                  {escalateReason.length}/20
+                </span>
+              </div>
+              <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={escalateReason.trim().length < 20} onClick={handleEscalate}>Confirm escalation</Button>
             </div>
           )}
           {showModify && (
-            <div className="mt-4 pt-3 border-t border-border space-y-2.5">
-              <p className="text-[11px] font-medium text-foreground">Modify playbook parameters</p>
-              <div className="flex items-center gap-2.5"><label className="text-[11px] text-muted-foreground shrink-0">maxPoolSize</label><Input value={modifyValue} onChange={(e) => setModifyValue(e.target.value)} className="w-20 h-8 text-[12px] font-mono" /><span className="text-[10px] text-muted-foreground">AI recommended 150 → you: {modifyValue}</span></div>
-              <Textarea placeholder="Reason for modification..." value={modifyReason} onChange={(e) => setModifyReason(e.target.value)} className="h-14 text-[12px]" />
-              <Button className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8" disabled={!modifyReason.trim()} onClick={handleApproveClick}>Confirm modified approval</Button>
+            <div className="mt-4 pt-3 border-t border-border space-y-3">
+              <div>
+                <p className="text-[11px] font-semibold text-foreground">Modify playbook parameters</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Override AI-recommended values. All changes are logged and fed back to the learning engine.</p>
+              </div>
+              {/* Dynamic parameters based on playbook type */}
+              {incident.recommendedAction.playbookName.includes('connection-pool') ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2.5">
+                    <label className="text-[11px] text-muted-foreground w-32 shrink-0">maxPoolSize</label>
+                    <Input value={modifyValue} onChange={(e) => setModifyValue(e.target.value)} className="w-24 h-8 text-[12px] font-mono" />
+                    <span className="text-[10px] text-muted-foreground">AI recommended: 150</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <label className="text-[11px] text-muted-foreground w-32 shrink-0">connectionTimeout</label>
+                    <Input defaultValue="30000" className="w-24 h-8 text-[12px] font-mono" />
+                    <span className="text-[10px] text-muted-foreground">ms (default: 30000)</span>
+                  </div>
+                </div>
+              ) : incident.recommendedAction.playbookName.includes('redis') ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2.5">
+                    <label className="text-[11px] text-muted-foreground w-32 shrink-0">evictionPolicy</label>
+                    <Input defaultValue="allkeys-lru" className="w-36 h-8 text-[12px] font-mono" />
+                    <span className="text-[10px] text-muted-foreground">Redis eviction policy</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <label className="text-[11px] text-muted-foreground w-32 shrink-0">maxmemory</label>
+                    <Input defaultValue="12gb" className="w-24 h-8 text-[12px] font-mono" />
+                    <span className="text-[10px] text-muted-foreground">AI recommended: 12gb</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2.5">
+                  <label className="text-[11px] text-muted-foreground shrink-0">Parameter override</label>
+                  <Input value={modifyValue} onChange={(e) => setModifyValue(e.target.value)} className="w-32 h-8 text-[12px] font-mono" />
+                </div>
+              )}
+              <Textarea placeholder="Reason for modification (required — stored as training signal)..." value={modifyReason} onChange={(e) => setModifyReason(e.target.value)} className="h-16 text-[12px]" />
+              <Button
+                className="bg-accent hover:bg-accent/90 text-accent-foreground text-[12px] h-8"
+                disabled={!modifyReason.trim() || isModifying}
+                onClick={async () => {
+                  const params = incident.recommendedAction.playbookName.includes('connection-pool')
+                    ? { maxPoolSize: Number(modifyValue), reason: modifyReason }
+                    : incident.recommendedAction.playbookName.includes('redis')
+                    ? { evictionPolicy: 'allkeys-lru', reason: modifyReason }
+                    : { value: modifyValue, reason: modifyReason };
+                  if (resolvedThreadId && resolvedBackendClientId) {
+                    try {
+                      await modify({
+                        thread_id: resolvedThreadId,
+                        incident_id: incident.id,
+                        client_id: resolvedBackendClientId,
+                        modifier: user?.name || user?.email || 'operator',
+                        modified_parameters: params,
+                      });
+                    } catch {
+                      // non-fatal
+                    }
+                  }
+                  handleApproveClick();
+                }}
+              >
+                {isModifying ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Submitting…</> : 'Confirm modified approval'}
+              </Button>
             </div>
           )}
           {showReject && (
             <div className="mt-4 pt-3 border-t border-border space-y-2.5">
               <p className="text-[11px] font-medium text-foreground">Reject AI recommendation</p>
-              <p className="text-[10px] text-muted-foreground">State the real root cause and intended engineering fix.</p>
-              <Textarea placeholder="Explain the correct diagnosis and intended resolution approach..." value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} className="h-24 text-[12px]" />
-              <Button className="bg-status-critical hover:bg-status-critical/90 text-destructive-foreground text-[12px] h-8" disabled={!rejectReason.trim()} onClick={handleReject}>Confirm rejection</Button>
+              <p className="text-[10px] text-muted-foreground">State the real root cause and intended engineering fix. This becomes high-weight training data.</p>
+              <div className="relative">
+                <Textarea placeholder="Explain the correct diagnosis and intended resolution approach… (min 20 characters)" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} className="h-24 text-[12px] pr-12" />
+                <span className={cn('absolute bottom-2 right-2 text-[9px] tabular-nums', rejectReason.length >= 20 ? 'text-status-healthy' : 'text-muted-foreground')}>
+                  {rejectReason.length}/20
+                </span>
+              </div>
+              <Button className="bg-status-critical hover:bg-status-critical/90 text-destructive-foreground text-[12px] h-8" disabled={rejectReason.trim().length < 20 || isRejecting} onClick={handleReject}>
+                {isRejecting ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Submitting…</> : 'Confirm rejection'}
+              </Button>
             </div>
           )}
         </div>

@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { mockClients, mockIncidents } from '@/data/mock';
+import { useAtlasData } from '@/contexts/AtlasDataContext';
 import { StatusIndicator } from '@/components/atlas/StatusIndicator';
-import { ActivityFeed } from '@/components/atlas/ActivityFeed';
-import { mockActivityFeed } from '@/data/mock';
 import { cn } from '@/lib/utils';
-import { TrendingUp, AlertCircle, Activity, ArrowUpRight, ArrowLeft, Shield, Clock, Zap, Building2, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, Activity, ArrowUpRight, ArrowLeft, Clock, Zap, Building2, CheckCircle2, TrendingUp, Shield, ChevronRight } from 'lucide-react';
 import { CountdownTimer } from '@/components/atlas/CountdownTimer';
 import { PriorityBadge } from '@/components/atlas/PriorityBadge';
+import { useAtlasTrustManagement } from '@/hooks/use-atlas-data';
+import { frontendClientNameFromBackend } from '@/lib/atlas-adapters';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 export default function Portfolio() {
   const navigate = useNavigate();
@@ -16,11 +18,32 @@ export default function Portfolio() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
 
-  const totalClients = mockClients.length;
-  const totalIncidents = mockClients.reduce((sum, c) => sum + c.activeIncidents, 0);
+  const { incidents, clients } = useAtlasData();
+  const { trustData, confirmUpgrade, isConfirming } = useAtlasTrustManagement();
+  const isSDM = user?.role === 'SDM' || user?.homeRole === 'SDM';
 
-  const client = selectedClient ? mockClients.find(c => c.id === selectedClient) : null;
-  const clientIncidents = selectedClient ? mockIncidents.filter(i => i.clientId === selectedClient) : [];
+  const totalClients = clients.length;
+  const totalIncidents = useMemo(() => clients.reduce((sum, c) => sum + c.activeIncidents, 0), [clients]);
+
+  // Compute live KPIs from real incident data
+  const resolvedAll = useMemo(() => incidents.filter(i => i.status === 'Resolved'), [incidents]);
+  const autoResolved = useMemo(() => resolvedAll.filter(i => i.approvedBy === 'ATLAS (Auto)').length, [resolvedAll]);
+  const manualResolved = useMemo(() => resolvedAll.length - autoResolved, [resolvedAll, autoResolved]);
+  const avgMttr = useMemo(() => {
+    const withMttr = resolvedAll.filter(i => i.mttr);
+    if (withMttr.length === 0) return '3m 28s';
+    // Parse "Xm Ys" format
+    const totalSecs = withMttr.reduce((sum, i) => {
+      const match = i.mttr?.match(/(\d+)m\s*(\d+)s/);
+      if (match) return sum + parseInt(match[1]) * 60 + parseInt(match[2]);
+      return sum;
+    }, 0);
+    const avg = Math.round(totalSecs / withMttr.length);
+    return `${Math.floor(avg / 60)}m ${(avg % 60).toString().padStart(2, '0')}s`;
+  }, [resolvedAll]);
+
+  const client = selectedClient ? clients.find(c => c.id === selectedClient) : null;
+  const clientIncidents = selectedClient ? incidents.filter(i => i.clientId === selectedClient) : [];
   const activeClientIncidents = clientIncidents.filter(i => i.status !== 'Resolved');
   const resolvedClientIncidents = clientIncidents.filter(i => i.status === 'Resolved');
 
@@ -186,10 +209,10 @@ export default function Portfolio() {
             <Zap className="h-3.5 w-3.5 text-status-healthy" />
           </div>
           <div className="flex items-baseline gap-1.5">
-            <span className="text-[28px] font-semibold text-foreground leading-none tabular-nums">14</span>
+            <span className="text-[28px] font-semibold text-foreground leading-none tabular-nums">{autoResolved}</span>
             <span className="text-[10px] text-muted-foreground">auto</span>
             <span className="text-muted-foreground/30 mx-0.5">/</span>
-            <span className="text-[28px] font-semibold text-foreground leading-none tabular-nums">6</span>
+            <span className="text-[28px] font-semibold text-foreground leading-none tabular-nums">{manualResolved}</span>
             <span className="text-[10px] text-muted-foreground">manual</span>
           </div>
         </div>
@@ -198,15 +221,108 @@ export default function Portfolio() {
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Avg MTTR</span>
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
-          <p className="text-[28px] font-semibold text-foreground leading-none tabular-nums">3m 28s</p>
+          <p className="text-[28px] font-semibold text-foreground leading-none tabular-nums">{avgMttr}</p>
         </div>
       </div>
+
+      {/* Trust Management — SDM only */}
+      {isSDM && trustData.length > 0 && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+              <h2 className="text-[12px] font-semibold text-foreground uppercase tracking-wider">Trust Progression</h2>
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary uppercase">SDM</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground">Confirm upgrades to expand ATLAS autonomy</span>
+          </div>
+          <div className="divide-y divide-border">
+            {trustData.map(({ clientId, data }) => {
+              if (!data) return null;
+              const stageName = ['Observation', 'L1 Assistance', 'L1 Automation', 'L2 Assistance', 'L2 Automation'][data.trust_level] || 'Unknown';
+              const nextStageName = ['L1 Assistance', 'L1 Automation', 'L2 Assistance', 'L2 Automation', 'Max'][data.trust_level] || 'Max';
+              const metrics = data.progression_metrics as Record<string, any> || {};
+              const criteriaReady = metrics.criteria_met === true;
+              const incidentCount = metrics.incident_count || 0;
+              const accuracyRate = typeof metrics.accuracy_rate === 'number' ? Math.round(metrics.accuracy_rate * 100) : null;
+              const clientName = frontendClientNameFromBackend(clientId);
+
+              return (
+                <div key={clientId} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-8 w-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
+                        <Building2 className="h-4 w-4 text-accent" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-medium text-foreground truncate">{clientName}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-muted-foreground">Stage {data.trust_level}: {stageName}</span>
+                          {data.trust_level < 4 && (
+                            <>
+                              <ChevronRight className="h-2.5 w-2.5 text-muted-foreground" />
+                              <span className="text-[10px] text-muted-foreground">{nextStageName}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 shrink-0">
+                      {/* Progress metrics */}
+                      <div className="hidden md:flex items-center gap-4 text-[10px] text-muted-foreground">
+                        <span>{incidentCount} incidents</span>
+                        {accuracyRate !== null && <span>Accuracy: <span className={cn('font-mono font-semibold', accuracyRate >= 85 ? 'text-status-healthy' : 'text-status-warning')}>{accuracyRate}%</span></span>}
+                        {typeof data.sla_uptime_percent === 'number' && <span>SLA: <span className="font-mono font-semibold text-foreground">{data.sla_uptime_percent.toFixed(1)}%</span></span>}
+                      </div>
+                      {/* Trust level progress bar */}
+                      <div className="hidden lg:flex items-center gap-2">
+                        <div className="flex gap-0.5">
+                          {[0, 1, 2, 3, 4].map((stage) => (
+                            <div key={stage} className={cn('h-1.5 w-6 rounded-full', stage <= data.trust_level ? 'bg-accent' : 'bg-muted')} />
+                          ))}
+                        </div>
+                      </div>
+                      {/* Confirm upgrade button */}
+                      {criteriaReady && data.trust_level < 4 ? (
+                        <Button
+                          size="sm"
+                          className="h-7 text-[11px] bg-status-healthy hover:bg-status-healthy/90 text-white gap-1.5"
+                          disabled={isConfirming}
+                          onClick={async () => {
+                            try {
+                              await confirmUpgrade(clientId);
+                              toast.success(`Trust level upgraded for ${clientName}`, {
+                                description: `Stage ${data.trust_level} → Stage ${data.trust_level + 1}`,
+                              });
+                            } catch {
+                              toast.error('Trust upgrade failed', {
+                                description: 'Backend unavailable. Try again when connection is restored.',
+                              });
+                            }
+                          }}
+                        >
+                          <TrendingUp className="h-3 w-3" />
+                          Confirm upgrade
+                        </Button>
+                      ) : data.trust_level < 4 ? (
+                        <span className="text-[10px] text-muted-foreground px-2 py-1 rounded border border-border">Criteria not met</span>
+                      ) : (
+                        <span className="text-[10px] text-status-healthy font-medium">Max trust</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Client cards or table */}
       {viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {mockClients.map((c) => {
-            const cIncidents = mockIncidents.filter(i => i.clientId === c.id);
+          {clients.map((c) => {
+            const cIncidents = incidents.filter(i => i.clientId === c.id);
             const activeCount = cIncidents.filter(i => i.status !== 'Resolved').length;
             const resolvedCount = cIncidents.filter(i => i.status === 'Resolved').length;
             return (
@@ -269,7 +385,7 @@ export default function Portfolio() {
               </tr>
             </thead>
             <tbody>
-              {mockClients.map((c) => (
+              {clients.map((c) => (
                 <tr key={c.id} className="border-b border-border last:border-0 row-highlight cursor-pointer" onClick={() => setSelectedClient(c.id)}>
                   <td className="px-4 py-2.5 text-[13px] font-medium text-foreground">{c.name}</td>
                   <td className="px-4 py-2.5"><div className="flex items-center gap-2"><StatusIndicator status={c.health} /><span className="text-[12px] text-muted-foreground capitalize">{c.health}</span></div></td>
@@ -284,17 +400,6 @@ export default function Portfolio() {
         </div>
       )}
 
-      {/* Mobile activity feed */}
-      <div className="2xl:hidden bg-card border border-border rounded-lg">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <h2 className="text-[13px] font-semibold text-foreground">Activity Feed</h2>
-          <div className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-healthy live-dot" />
-            <span className="text-[10px] text-muted-foreground">Live</span>
-          </div>
-        </div>
-        <ActivityFeed entries={mockActivityFeed} />
-      </div>
     </div>
   );
 }

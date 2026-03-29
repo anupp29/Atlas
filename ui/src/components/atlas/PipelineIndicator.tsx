@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils';
-import { Check, Radio, Radar, GitBranch, Search, Brain, Shield, Zap, BookOpen } from 'lucide-react';
+import { Check, Radio, Radar, GitBranch, Search, Brain, Shield, Zap, BookOpen, Wrench } from 'lucide-react';
 
 export type PipelineStage = 'ingest' | 'detect' | 'correlate' | 'search' | 'reason' | 'select' | 'route' | 'act' | 'learn';
 
@@ -11,6 +11,8 @@ const stages: { key: PipelineStage; label: string; icon: React.ElementType; desc
   { key: 'reason', label: 'Reason', icon: Brain, description: 'Root cause analysis' },
   { key: 'select', label: 'Select', icon: Shield, description: 'Action & governance' },
   { key: 'route', label: 'Route', icon: Zap, description: 'Engineer routing' },
+  { key: 'act', label: 'Act', icon: Wrench, description: 'Playbook execution' },
+  { key: 'learn', label: 'Learn', icon: BookOpen, description: 'Post-incident learning' },
 ];
 
 const stageOrder: Record<PipelineStage, number> = {
@@ -23,11 +25,25 @@ interface PipelineIndicatorProps {
   compact?: boolean;
 }
 
-export function PipelineIndicator({ currentStage, className, compact }: PipelineIndicatorProps) {
+export function PipelineIndicator({ currentStage, className, compact }: Readonly<PipelineIndicatorProps>) {
   const currentIndex = stageOrder[currentStage];
 
-  // In act/learn phases, all 7 analysis steps are complete
-  const allAnalysisComplete = currentIndex >= 7;
+  const analysisComplete = currentIndex >= stageOrder.route;
+  const lifecycleComplete = currentIndex >= stageOrder.learn;
+  let statusLabel = 'Processing...';
+  if (lifecycleComplete) {
+    statusLabel = 'Lifecycle complete';
+  } else if (analysisComplete) {
+    statusLabel = 'Analysis complete';
+  }
+  const statusClass = lifecycleComplete || analysisComplete ? 'text-status-healthy' : 'text-accent';
+  const showPulse = !lifecycleComplete && !analysisComplete;
+
+  const connectorClass = (index: number): string => {
+    if (index < currentIndex - 1) return 'bg-status-healthy/40';
+    if (index === currentIndex - 1) return 'bg-accent/40';
+    return 'bg-border';
+  };
 
   return (
     <div className={cn('bg-card border border-border rounded-lg shadow-atlas overflow-hidden', className)}>
@@ -39,26 +55,17 @@ export function PipelineIndicator({ currentStage, className, compact }: Pipeline
           <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">ATLAS Intelligence Pipeline</span>
         </div>
         <div className="flex items-center gap-1.5">
-          {allAnalysisComplete ? (
-            <>
-              <Check className="h-3 w-3 text-status-healthy" />
-              <span className="text-[10px] font-medium text-status-healthy">Analysis complete — 4.8s</span>
-            </>
-          ) : (
-            <>
-              <div className="h-1.5 w-1.5 rounded-full bg-accent atlas-pulse" />
-              <span className="text-[10px] font-medium text-accent">Processing...</span>
-            </>
-          )}
+          {showPulse ? <div className="h-1.5 w-1.5 rounded-full bg-accent atlas-pulse" /> : <Check className="h-3 w-3 text-status-healthy" />}
+          <span className={cn('text-[10px] font-medium', statusClass)}>{statusLabel}</span>
         </div>
       </div>
 
       <div className="px-4 py-3">
         <div className="flex items-center justify-between">
           {stages.map((stage, i) => {
-            const isComplete = allAnalysisComplete || i < currentIndex;
-            const isCurrent = !allAnalysisComplete && i === currentIndex;
-            const isFuture = !allAnalysisComplete && i > currentIndex;
+            const isComplete = i < currentIndex || (lifecycleComplete && i === currentIndex);
+            const isCurrent = !lifecycleComplete && i === currentIndex;
+            const isFuture = i > currentIndex;
             const Icon = stage.icon;
 
             return (
@@ -98,8 +105,7 @@ export function PipelineIndicator({ currentStage, className, compact }: Pipeline
                 {i < stages.length - 1 && (
                   <div className={cn(
                     'h-[2px] w-3 lg:w-5 -mt-3',
-                    (allAnalysisComplete || i < currentIndex - 1) ? 'bg-status-healthy/40' :
-                    (i === currentIndex - 1) ? 'bg-accent/40' : 'bg-border',
+                    connectorClass(i),
                   )} />
                 )}
               </div>

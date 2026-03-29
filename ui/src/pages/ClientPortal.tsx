@@ -1,25 +1,45 @@
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { mockClients, mockIncidents, mockAuditLog } from '@/data/mock';
+import { mockClients } from '@/data/mock';
 import { StatusIndicator } from '@/components/atlas/StatusIndicator';
 import { ChevronDown, ChevronRight, CheckCircle2, Clock, Shield, AlertTriangle, ArrowUpRight, LogOut, Bell, Activity, BarChart3, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { CountdownTimer } from '@/components/atlas/CountdownTimer';
+import { useAtlasData } from '@/contexts/AtlasDataContext';
+import { useAtlasClientAudit } from '@/hooks/use-atlas-data';
+import { backendClientIdFromFrontend } from '@/lib/atlas-adapters';
 
 type PortalTab = 'overview' | 'incidents' | 'monitoring' | 'reports';
 
 export default function ClientPortal() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const client = mockClients[0]; // In production, resolve from user's org
-  const clientIncidents = mockIncidents.filter(i => i.clientId === client.id || i.clientName === client.name);
+
+  const { incidents, clients } = useAtlasData();
+
+  // Resolve the client from the logged-in user's email domain or fall back to first client
+  // CLIENT users are scoped to a single client — infer from email or use first available
+  const inferClientFromUser = (): string => {
+    const email = user?.email?.toLowerCase() || '';
+    if (email.includes('financecore') || email.includes('fincore')) return 'client-financecore';
+    if (email.includes('retailmax')) return 'client-retailmax';
+    // Fall back to first client in the list
+    return clients[0]?.id || mockClients[0].id;
+  };
+
+  const clientId = inferClientFromUser();
+  const client = clients.find(c => c.id === clientId) || mockClients.find(c => c.id === clientId) || mockClients[0];
+
+  const clientIncidents = incidents.filter(i => i.clientId === client.id || i.clientName === client.name);
   const activeIncidents = clientIncidents.filter(i => i.status !== 'Resolved');
   const resolvedIncidents = clientIncidents.filter(i => i.status === 'Resolved');
+
+  const { auditLog: clientAuditRaw } = useAtlasClientAudit(client.id, client.name);
+  const clientAudit = clientAuditRaw.slice(0, 15);
+
   const [expandedIncident, setExpandedIncident] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<PortalTab>('overview');
-
-  const clientAudit = mockAuditLog.filter(a => a.client === client.name).slice(0, 10);
 
   const handleLogout = () => {
     logout();
@@ -39,9 +59,12 @@ export default function ClientPortal() {
       <aside className="w-[240px] bg-primary flex flex-col shrink-0 h-screen sticky top-0">
         <div className="px-5 pt-5 pb-5">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-lg bg-accent flex items-center justify-center">
-              <Shield className="h-4.5 w-4.5 text-accent-foreground" />
-            </div>
+            <svg className="h-9 w-9 shrink-0" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="36" height="36" rx="7" fill="#1a2744"/>
+              <path d="M18 26 L10 26 L18 10 L26 26 Z" fill="none" stroke="#0066CC" strokeWidth="1.8" strokeLinejoin="round"/>
+              <path d="M18 26 L14 26 L18 18 L22 26 Z" fill="#0066CC"/>
+              <circle cx="18" cy="10" r="1.8" fill="#38bdf8"/>
+            </svg>
             <div>
               <h1 className="text-[15px] font-bold tracking-[0.15em] leading-none text-primary-foreground">ATLAS</h1>
               <p className="text-[9px] text-primary-foreground/40 mt-0.5 tracking-[0.08em] uppercase">Client Portal</p>
@@ -142,16 +165,26 @@ export default function ClientPortal() {
                 </div>
                 <div className="bg-card border border-border rounded-lg p-4">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Autonomous Resolution</p>
-                  <p className="text-[24px] font-semibold text-foreground tabular-nums">70%</p>
+                  <p className="text-[24px] font-semibold text-foreground tabular-nums">
+                    {clientIncidents.length > 0 ? Math.round((resolvedIncidents.filter(i => i.approvedBy === 'ATLAS (Auto)').length / Math.max(clientIncidents.length, 1)) * 100) : 0}%
+                  </p>
                   <div className="flex items-center gap-2 mt-1">
                     <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden max-w-[100px]">
-                      <div className="h-full bg-status-healthy rounded-full" style={{ width: '70%' }} />
+                      <div className="h-full bg-status-healthy rounded-full" style={{ width: `${clientIncidents.length > 0 ? Math.round((resolvedIncidents.filter(i => i.approvedBy === 'ATLAS (Auto)').length / Math.max(clientIncidents.length, 1)) * 100) : 0}%` }} />
                     </div>
                   </div>
                 </div>
                 <div className="bg-card border border-border rounded-lg p-4">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Avg Resolution Time</p>
-                  <p className="text-[24px] font-semibold text-status-healthy tabular-nums">3m 28s</p>
+                  <p className="text-[24px] font-semibold text-status-healthy tabular-nums">
+                    {(() => {
+                      const withMttr = resolvedIncidents.filter(i => i.mttr);
+                      if (!withMttr.length) return '—';
+                      const total = withMttr.reduce((s, i) => { const m = i.mttr?.match(/(\d+)m\s*(\d+)s/); return m ? s + parseInt(m[1]) * 60 + parseInt(m[2]) : s; }, 0);
+                      const avg = Math.round(total / withMttr.length);
+                      return `${Math.floor(avg / 60)}m ${(avg % 60).toString().padStart(2, '0')}s`;
+                    })()}
+                  </p>
                   <p className="text-[10px] text-muted-foreground mt-1">Industry avg: 43 min</p>
                 </div>
               </div>
@@ -320,29 +353,44 @@ export default function ClientPortal() {
               <h2 className="text-[16px] font-semibold text-foreground">System Monitoring</h2>
               <p className="text-[12px] text-muted-foreground">Real-time health status of your monitored services.</p>
 
-              {/* Service health grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {(clientIncidents[0]?.services || []).map(svc => (
-                  <div key={svc.id} className="bg-card border border-border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <StatusIndicator status={svc.health} />
-                        <span className="text-[13px] font-medium text-foreground">{svc.name}</span>
-                      </div>
-                      <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded',
-                        svc.criticality === 'High' ? 'bg-status-critical/8 text-status-critical' : 'bg-muted text-muted-foreground'
-                      )}>{svc.criticality}</span>
+              {/* Service health grid — aggregate all unique services across all incidents */}
+              {(() => {
+                const allServices = clientIncidents.flatMap(i => i.services);
+                const uniqueServices = Array.from(
+                  new Map(allServices.map(s => [s.name, s])).values()
+                );
+                if (uniqueServices.length === 0) {
+                  return (
+                    <div className="bg-card border border-border rounded-lg p-8 text-center">
+                      <p className="text-[12px] text-muted-foreground">No service data available. Services will appear here when incidents are detected.</p>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">{svc.technology}</p>
-                    {svc.triggerMetric && (
-                      <div className="mt-2 flex items-center justify-between text-[10px]">
-                        <span className="text-muted-foreground">{svc.triggerMetric}</span>
-                        <span className="font-mono text-foreground">{svc.triggerValue}</span>
+                  );
+                }
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {uniqueServices.map(svc => (
+                      <div key={svc.id} className="bg-card border border-border rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <StatusIndicator status={svc.health} />
+                            <span className="text-[13px] font-medium text-foreground">{svc.name}</span>
+                          </div>
+                          <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded',
+                            svc.criticality === 'High' ? 'bg-status-critical/8 text-status-critical' : 'bg-muted text-muted-foreground'
+                          )}>{svc.criticality}</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">{svc.technology}</p>
+                        {svc.triggerMetric && (
+                          <div className="mt-2 flex items-center justify-between text-[10px]">
+                            <span className="text-muted-foreground">{svc.triggerMetric}</span>
+                            <span className="font-mono text-foreground">{svc.triggerValue}</span>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
 
               {/* Activity timeline */}
               <div className="bg-card border border-border rounded-lg">
@@ -376,22 +424,32 @@ export default function ClientPortal() {
           {activeTab === 'reports' && (
             <div className="max-w-5xl space-y-5">
               <h2 className="text-[16px] font-semibold text-foreground">Service Reports</h2>
-              <p className="text-[12px] text-muted-foreground">Monthly performance and compliance reports for your environment.</p>
+              <p className="text-[12px] text-muted-foreground">Performance and compliance summary for your environment.</p>
               <div className="bg-card border border-border rounded-lg p-5">
                 <p className="text-[12px] text-foreground leading-relaxed">
-                  Atos's autonomous monitoring has resolved <span className="font-semibold">14 of your last 20 incidents</span> automatically,
-                  with an average resolution time of <span className="font-semibold">3 minutes 28 seconds</span>.
-                  Your environment is continuously monitored across <span className="font-semibold">5 services</span>.
+                  {resolvedIncidents.length > 0 ? (
+                    <>ATLAS has resolved <span className="font-semibold">{resolvedIncidents.filter(i => i.approvedBy === 'ATLAS (Auto)').length} of {resolvedIncidents.length} incidents</span> automatically, with an average resolution time of <span className="font-semibold">{(() => { const withMttr = resolvedIncidents.filter(i => i.mttr); if (!withMttr.length) return '—'; const total = withMttr.reduce((s, i) => { const m = i.mttr?.match(/(\d+)m\s*(\d+)s/); return m ? s + parseInt(m[1]) * 60 + parseInt(m[2]) : s; }, 0); const avg = Math.round(total / withMttr.length); return `${Math.floor(avg / 60)}m ${(avg % 60).toString().padStart(2, '0')}s`; })()}</span>. Your environment is continuously monitored across <span className="font-semibold">{clientIncidents[0]?.services?.length || 0} services</span>.</>
+                  ) : (
+                    <>Your environment is actively monitored. No incidents have been resolved in the current period.</>
+                  )}
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-card border border-border rounded-lg p-4 text-center">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Total Incidents (30d)</p>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Total Incidents</p>
                   <p className="text-[28px] font-semibold text-foreground tabular-nums">{clientIncidents.length}</p>
                 </div>
                 <div className="bg-card border border-border rounded-lg p-4 text-center">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Resolution Rate</p>
-                  <p className="text-[28px] font-semibold text-status-healthy tabular-nums">{resolvedIncidents.length > 0 ? Math.round((resolvedIncidents.length / clientIncidents.length) * 100) : 0}%</p>
+                  <p className="text-[28px] font-semibold text-status-healthy tabular-nums">{clientIncidents.length > 0 ? Math.round((resolvedIncidents.length / clientIncidents.length) * 100) : 0}%</p>
+                </div>
+                <div className="bg-card border border-border rounded-lg p-4 text-center">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Auto-Resolved</p>
+                  <p className="text-[28px] font-semibold text-foreground tabular-nums">{resolvedIncidents.filter(i => i.approvedBy === 'ATLAS (Auto)').length}</p>
+                </div>
+                <div className="bg-card border border-border rounded-lg p-4 text-center">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">SLA Compliance</p>
+                  <p className="text-[28px] font-semibold text-status-healthy tabular-nums">{client.slaCompliance}%</p>
                 </div>
               </div>
             </div>

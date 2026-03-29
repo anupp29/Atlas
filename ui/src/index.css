@@ -49,6 +49,15 @@
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 220 38% 22%;
     --sidebar-ring: 211 100% 50%;
+
+    /* Atlas semantic tokens — used by tailwind config */
+    --atlas-navy: 220 44% 17%;
+    --atlas-accent: 211 100% 40%;
+    --atlas-bg: 220 20% 97%;
+    --atlas-card: 0 0% 100%;
+    --atlas-text-primary: 222 47% 11%;
+    --atlas-text-secondary: 215 16% 47%;
+    --atlas-border: 220 13% 90%;
   }
 }
 
