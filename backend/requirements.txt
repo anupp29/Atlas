@@ -23,6 +23,7 @@ flatbuffers==25.12.19
 fsspec==2026.3.0
 googleapis-common-protos==1.73.1
 grpcio==1.78.0
+gunicorn==25.3.0
 h11==0.16.0
 h2==4.3.0
 hf-xet==1.4.2
