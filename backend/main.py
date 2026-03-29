@@ -38,7 +38,7 @@ _env_path = Path(__file__).parent.parent / ".env"
 if _env_path.exists():
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=_env_path, override=False)
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -320,6 +320,272 @@ class ModifyRequest(BaseModel):
     modified_parameters: dict[str, Any]
 
 
+_KNOWN_ATLAS_ROLES: frozenset[str] = frozenset({"L1", "L2", "L3", "SDM", "CLIENT"})
+_MUTATION_ALLOWED_ROLES: frozenset[str] = frozenset({"L1", "L2", "L3", "SDM"})
+_MODIFY_ALLOWED_ROLES: frozenset[str] = frozenset({"L2", "L3", "SDM"})
+
+
+_PIPELINE_STAGE_ORDER: list[str] = [
+    "ingest",
+    "detect",
+    "correlate",
+    "search",
+    "reason",
+    "select",
+    "route",
+    "act",
+    "learn",
+]
+
+_STAGE_LABELS: dict[str, str] = {
+    "ingest": "Ingest",
+    "detect": "Detect",
+    "correlate": "Correlate",
+    "search": "Search",
+    "reason": "Reason",
+    "select": "Select",
+    "route": "Route",
+    "act": "Act",
+    "learn": "Learn",
+}
+
+_AUDIT_STAGE_NODE_MAP: dict[str, str] = {
+    "pipeline_entry": "ingest",
+    "n1_classifier": "detect",
+    "n2_itsm": "route",
+    "n3_graph": "correlate",
+    "n4_semantic": "search",
+    "n5_reasoning": "reason",
+    "n6_confidence": "select",
+    "n7_router": "route",
+    "execute_playbook": "act",
+    "n_learn": "learn",
+}
+
+_AUDIT_IGNORED_KEYS: frozenset[str] = frozenset(
+    {
+        "timestamp",
+        "node",
+        "actor",
+        "action",
+        "incident_id",
+        "client_id",
+    }
+)
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-safe clone of a value, coercing unsupported objects to strings."""
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return value
+
+
+def _infer_pipeline_stage_from_state(state: dict[str, Any]) -> str:
+    """Infer the current pipeline stage from persisted incident state."""
+    execution_status = str(state.get("execution_status") or "").lower()
+    resolution = str(state.get("resolution_outcome") or "").lower()
+
+    if resolution == "success":
+        return "learn"
+    if execution_status in {"executing", "success", "failed", "rollback", "blocked", "error"}:
+        return "act"
+    if state.get("routing_decision"):
+        return "route"
+    if state.get("recommended_action_id"):
+        return "select"
+    if state.get("root_cause"):
+        return "reason"
+    if state.get("semantic_matches") or state.get("no_historical_precedent"):
+        return "search"
+    if state.get("blast_radius") or state.get("graph_unavailable"):
+        return "correlate"
+    if state.get("incident_priority"):
+        return "detect"
+    return "ingest"
+
+
+def _stage_reason_ingest(state: dict[str, Any]) -> str:
+    evidence_count = len(state.get("evidence_packages") or [])
+    return f"Captured {evidence_count} evidence package(s) for incident processing."
+
+
+def _stage_reason_detect(state: dict[str, Any]) -> str:
+    priority = state.get("incident_priority") or "pending"
+    summary = str(state.get("situation_summary") or "Detection summary pending.")
+    return f"Priority {priority}. {summary}"
+
+
+def _stage_reason_correlate(state: dict[str, Any]) -> str:
+    blast = len(state.get("blast_radius") or [])
+    deployments = len(state.get("recent_deployments") or [])
+    return f"Graph correlation found {blast} blast-radius service(s) and {deployments} deployment(s)."
+
+
+def _stage_reason_search(state: dict[str, Any]) -> str:
+    if state.get("no_historical_precedent"):
+        return "No strong historical precedent found; incident treated as novel."
+    matches = len(state.get("semantic_matches") or [])
+    return f"Semantic retrieval returned {matches} historical match(es)."
+
+
+def _stage_reason_reason(state: dict[str, Any]) -> str:
+    root_cause = str(state.get("root_cause") or "Root cause reasoning pending.")
+    return root_cause[:200]
+
+
+def _stage_reason_select(state: dict[str, Any]) -> str:
+    action_id = state.get("recommended_action_id") or "pending"
+    score = state.get("composite_confidence_score")
+    if isinstance(score, (int, float)):
+        return f"Selected action {action_id} with composite confidence {score:.2f}."
+    return f"Selected action {action_id}."
+
+
+def _stage_reason_route(state: dict[str, Any]) -> str:
+    routing = state.get("routing_decision") or "pending"
+    human_action = state.get("human_action")
+    if human_action:
+        return f"Routing {routing}; human decision received: {human_action}."
+    return f"Routing decision: {routing}."
+
+
+def _stage_reason_act(state: dict[str, Any]) -> str:
+    execution = state.get("execution_status") or "pending"
+    return f"Execution status: {execution}."
+
+
+def _stage_reason_learn(state: dict[str, Any]) -> str:
+    outcome = state.get("resolution_outcome") or "pending"
+    mttr_seconds = state.get("mttr_seconds")
+    if isinstance(mttr_seconds, int) and mttr_seconds > 0:
+        return f"Resolution outcome: {outcome}. MTTR recorded at {mttr_seconds} seconds."
+    return f"Resolution outcome: {outcome}."
+
+
+_STAGE_REASON_BUILDERS: dict[str, Any] = {
+    "ingest": _stage_reason_ingest,
+    "detect": _stage_reason_detect,
+    "correlate": _stage_reason_correlate,
+    "search": _stage_reason_search,
+    "reason": _stage_reason_reason,
+    "select": _stage_reason_select,
+    "route": _stage_reason_route,
+    "act": _stage_reason_act,
+    "learn": _stage_reason_learn,
+}
+
+
+def _build_stage_reason(state: dict[str, Any], stage: str) -> str:
+    """Build a concise reason string for each pipeline stage."""
+    builder = _STAGE_REASON_BUILDERS.get(stage)
+    if not builder:
+        return "Stage update recorded."
+    return str(builder(state))
+
+
+def _extract_stage_activity(audit_trail: list[Any]) -> tuple[dict[str, str], dict[str, list[str]]]:
+    stage_timestamp: dict[str, str] = {}
+    stage_changed_fields: dict[str, list[str]] = {}
+
+    for entry in audit_trail:
+        if not isinstance(entry, dict):
+            continue
+        node_name = str(entry.get("node") or "")
+        stage = _AUDIT_STAGE_NODE_MAP.get(node_name)
+        if not stage:
+            continue
+
+        timestamp = str(entry.get("timestamp") or "")
+        if stage not in stage_timestamp and timestamp:
+            stage_timestamp[stage] = timestamp
+
+        changed_fields = sorted(str(key) for key in entry.keys() if key not in _AUDIT_IGNORED_KEYS)
+        if changed_fields and stage not in stage_changed_fields:
+            stage_changed_fields[stage] = changed_fields
+
+    return stage_timestamp, stage_changed_fields
+
+
+def _stage_status(stage: str, index: int, current_index: int, state: dict[str, Any]) -> str:
+    status = "pending"
+    if index < current_index:
+        status = "completed"
+    elif index == current_index:
+        status = "active"
+
+    execution_status = str(state.get("execution_status") or "").lower()
+    human_action = str(state.get("human_action") or "").lower()
+    if stage == "act" and execution_status in {"success", "failed", "rollback", "error"}:
+        return "completed"
+    if stage == "act" and (execution_status == "blocked" or human_action in {"rejected", "escalated"}):
+        return "blocked"
+    if stage == "learn" and str(state.get("resolution_outcome") or "").lower() == "success":
+        return "completed"
+    return status
+
+
+def _build_stage_timeline(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build a normalized nine-stage timeline snapshot from state + audit trail."""
+    audit_trail = state.get("audit_trail") if isinstance(state.get("audit_trail"), list) else []
+    stage_timestamp, stage_changed_fields = _extract_stage_activity(audit_trail)
+
+    current_stage = _infer_pipeline_stage_from_state(state)
+    current_index = _PIPELINE_STAGE_ORDER.index(current_stage)
+
+    timeline = [
+        {
+            "stage": stage,
+            "label": _STAGE_LABELS.get(stage, stage.title()),
+            "status": _stage_status(stage, index, current_index, state),
+            "timestamp": stage_timestamp.get(stage, ""),
+            "reason": _build_stage_reason(state, stage),
+            "changed_fields": stage_changed_fields.get(stage, []),
+        }
+        for index, stage in enumerate(_PIPELINE_STAGE_ORDER)
+    ]
+
+    return _json_safe(timeline)
+
+
+def _serialize_incident_state(thread_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe, frontend-facing snapshot of one incident state."""
+    return {
+        "thread_id": thread_id,
+        "incident_id": state.get("incident_id"),
+        "client_id": state.get("client_id"),
+        "priority": state.get("incident_priority"),
+        "routing_decision": state.get("routing_decision"),
+        "composite_confidence_score": state.get("composite_confidence_score"),
+        "execution_status": state.get("execution_status"),
+        "servicenow_ticket_id": state.get("servicenow_ticket_id"),
+        "sla_breach_time": str(state.get("sla_breach_time", "")),
+        "human_action": state.get("human_action"),
+        "human_modifier": state.get("human_modifier"),
+        "resolution_outcome": state.get("resolution_outcome"),
+        "mttr_start_time": state.get("mttr_start_time"),
+        "mttr_seconds": state.get("mttr_seconds"),
+        "situation_summary": state.get("situation_summary"),
+        "root_cause": state.get("root_cause"),
+        "explanation_for_engineer": state.get("explanation_for_engineer"),
+        "technical_evidence_summary": state.get("technical_evidence_summary"),
+        "recommended_action_id": state.get("recommended_action_id"),
+        "active_veto_conditions": state.get("active_veto_conditions") or [],
+        "blast_radius": state.get("blast_radius") or [],
+        "recent_deployments": state.get("recent_deployments") or [],
+        "semantic_matches": state.get("semantic_matches") or [],
+        "alternative_hypotheses": state.get("alternative_hypotheses") or [],
+        "factor_scores": state.get("factor_scores") or {},
+        "confidence_factors": state.get("confidence_factors") or {},
+        "graph_unavailable": bool(state.get("graph_unavailable", False)),
+        "no_historical_precedent": bool(state.get("no_historical_precedent", False)),
+        "evidence_packages": state.get("evidence_packages") or [],
+        "audit_trail": _json_safe(state.get("audit_trail") or []),
+        "stage_timeline": _build_stage_timeline(state),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTTP Routes
 # ─────────────────────────────────────────────────────────────────────────────
@@ -386,17 +652,19 @@ async def receive_cmdb_webhook(payload: CMDBWebhookPayload) -> dict[str, str]:
 
 
 @app.post("/api/incidents/approve", status_code=status.HTTP_200_OK)
-async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
+async def approve_incident(request: ApprovalRequest, http_request: Request) -> dict[str, Any]:
     """
     Human approval submission. Resumes the suspended LangGraph pipeline.
     For PCI-DSS/SOX clients, validates the cryptographic approval token.
     """
+    role, header_actor = _require_atlas_role(http_request, _MUTATION_ALLOWED_ROLES)
+    _enforce_actor_header_match(header_actor, request.approver, "approver")
     _validate_client_id(request.client_id)
 
     # Validate approval token if provided (PCI-DSS/SOX dual sign-off)
     if request.token:
         from backend.execution.approval_tokens import validate_approval_token
-        valid, token_incident_id, approver_role, _reason = validate_approval_token(request.token)
+        valid, token_incident_id, _, _reason = validate_approval_token(request.token)
         if not valid:
             raise HTTPException(status_code=403, detail="Approval token is invalid or expired.")
         if token_incident_id != request.incident_id:
@@ -407,6 +675,7 @@ async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
         client_id=request.client_id,
         incident_id=request.incident_id,
         approver=request.approver,
+        role=role,
         thread_id=request.thread_id,
     )
 
@@ -427,10 +696,8 @@ async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
     _active_incidents[request.thread_id] = final_state
     _active_incidents_timestamps[request.thread_id] = _time.monotonic()
     await incident_manager.send_to_client(request.client_id, {
-        "type": "incident_approved",
-        "incident_id": request.incident_id,
-        "thread_id": request.thread_id,
-        "execution_status": final_state.get("execution_status", ""),
+        "type": "incident_updated",
+        "incident": _serialize_incident_state(request.thread_id, final_state),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     await activity_manager.broadcast({
@@ -451,10 +718,12 @@ async def approve_incident(request: ApprovalRequest) -> dict[str, Any]:
 
 
 @app.post("/api/incidents/reject", status_code=status.HTTP_200_OK)
-async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
+async def reject_incident(request: RejectionRequest, http_request: Request) -> dict[str, Any]:
     """
     Human rejection with mandatory reason. Resumes pipeline with rejection signal.
     """
+    role, header_actor = _require_atlas_role(http_request, _MUTATION_ALLOWED_ROLES)
+    _enforce_actor_header_match(header_actor, request.rejector, "rejector")
     _validate_client_id(request.client_id)
 
     logger.info(
@@ -462,6 +731,7 @@ async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
         client_id=request.client_id,
         incident_id=request.incident_id,
         rejector=request.rejector,
+        role=role,
     )
 
     from backend.orchestrator.pipeline import resume_after_approval
@@ -480,6 +750,11 @@ async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
     final_state["thread_id"] = request.thread_id
     _active_incidents[request.thread_id] = final_state
     _active_incidents_timestamps[request.thread_id] = _time.monotonic()
+    await incident_manager.send_to_client(request.client_id, {
+        "type": "incident_updated",
+        "incident": _serialize_incident_state(request.thread_id, final_state),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
     await activity_manager.broadcast({
         "type": "human_action",
         "action": "rejected",
@@ -498,11 +773,21 @@ async def reject_incident(request: RejectionRequest) -> dict[str, Any]:
 
 
 @app.post("/api/incidents/modify", status_code=status.HTTP_200_OK)
-async def modify_incident(request: ModifyRequest) -> dict[str, Any]:
+async def modify_incident(request: ModifyRequest, http_request: Request) -> dict[str, Any]:
     """
     L2 modification — approve with parameter overrides. Logs the diff.
     """
+    role, header_actor = _require_atlas_role(http_request, _MODIFY_ALLOWED_ROLES)
+    _enforce_actor_header_match(header_actor, request.modifier, "modifier")
     _validate_client_id(request.client_id)
+
+    logger.info(
+        "api.modify.received",
+        client_id=request.client_id,
+        incident_id=request.incident_id,
+        modifier=request.modifier,
+        role=role,
+    )
 
     from backend.orchestrator.pipeline import resume_after_approval
     try:
@@ -531,6 +816,15 @@ async def modify_incident(request: ModifyRequest) -> dict[str, Any]:
         playbook_defaults=playbook_defaults,
     )
 
+    import time as _time
+    _active_incidents[request.thread_id] = final_state
+    _active_incidents_timestamps[request.thread_id] = _time.monotonic()
+    await incident_manager.send_to_client(request.client_id, {
+        "type": "incident_updated",
+        "incident": _serialize_incident_state(request.thread_id, final_state),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
     return {
         "status": "modified",
         "incident_id": request.incident_id,
@@ -555,19 +849,50 @@ async def get_active_incidents(client_id: str | None = None) -> dict[str, Any]:
     return {
         "count": len(incidents),
         "incidents": [
-            {
-                "thread_id": tid,
-                "incident_id": state.get("incident_id"),
-                "client_id": state.get("client_id"),
-                "priority": state.get("incident_priority"),
-                "routing_decision": state.get("routing_decision"),
-                "composite_confidence_score": state.get("composite_confidence_score"),
-                "execution_status": state.get("execution_status"),
-                "servicenow_ticket_id": state.get("servicenow_ticket_id"),
-                "sla_breach_time": str(state.get("sla_breach_time", "")),
-            }
+            _serialize_incident_state(tid, state)
             for tid, state in incidents.items()
         ],
+    }
+
+
+@app.get("/api/incidents/details/{thread_id}", status_code=status.HTTP_200_OK)
+async def get_incident_details(
+    thread_id: str,
+    request: Request,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Return a detailed snapshot for one incident thread."""
+    _require_atlas_role(request, _KNOWN_ATLAS_ROLES)
+
+    state = _active_incidents.get(thread_id)
+    if state is None:
+        from backend.orchestrator.pipeline import get_incident_state
+
+        state = await get_incident_state(thread_id)
+
+    if state is None:
+        raise HTTPException(status_code=404, detail="Incident thread not found.")
+
+    incident_client_id = str(state.get("client_id") or "")
+    if client_id:
+        _validate_client_id(client_id)
+        if incident_client_id and incident_client_id != client_id:
+            raise HTTPException(
+                status_code=403,
+                detail="client_id does not match the incident thread scope.",
+            )
+
+    incident = _serialize_incident_state(thread_id, state)
+    audit_trail = incident.get("audit_trail") if isinstance(incident.get("audit_trail"), list) else []
+    last_updated = ""
+    if audit_trail and isinstance(audit_trail[-1], dict):
+        last_updated = str(audit_trail[-1].get("timestamp") or "")
+
+    return {
+        "thread_id": thread_id,
+        "incident": incident,
+        "audit_trail_count": len(audit_trail),
+        "last_updated": last_updated,
     }
 
 
@@ -615,6 +940,88 @@ async def get_trust_level(client_id: str) -> dict[str, Any]:
     }
 
 
+@app.post("/api/trust/{client_id}/confirm-upgrade", status_code=status.HTTP_200_OK)
+async def confirm_trust_upgrade(client_id: str, http_request: Request) -> dict[str, Any]:
+    """
+    SDM-only: confirm a pending trust stage upgrade for a client.
+    Requires SDM role. Writes an immutable audit record.
+    """
+    role, header_actor = _require_atlas_role(http_request, frozenset({"SDM"}))
+    _validate_client_id(client_id)
+
+    from backend.config.client_registry import get_client
+    from backend.learning.trust_progression import confirm_upgrade, get_progression_metrics
+
+    client_config = get_client(client_id)
+    current_stage = client_config.get("trust_level", 0)
+    new_stage = current_stage + 1
+
+    if new_stage > 4:
+        raise HTTPException(status_code=400, detail="Client is already at maximum trust level.")
+
+    try:
+        confirm_upgrade(
+            client_id=client_id,
+            new_stage=new_stage,
+            sdm_confirmed_by=header_actor or "SDM",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Trust upgrade failed: {exc}")
+
+    metrics = get_progression_metrics(client_id)
+
+    await activity_manager.broadcast({
+        "type": "trust_upgrade",
+        "client_id": client_id,
+        "new_stage": new_stage,
+        "previous_stage": current_stage,
+        "confirmed_by": header_actor,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    return {
+        "client_id": client_id,
+        "previous_stage": current_stage,
+        "new_stage": new_stage,
+        "confirmed_by": header_actor,
+        "progression_metrics": metrics,
+        "message": f"Trust level upgraded from Stage {current_stage} to Stage {new_stage}.",
+    }
+
+
+@app.get("/api/playbooks", status_code=status.HTTP_200_OK)
+async def get_playbook_library() -> dict[str, Any]:
+    """
+    Return the full playbook library — all registered, versioned playbooks.
+    Used by the frontend Playbooks page to display live library data.
+    """
+    from backend.execution.playbook_library import list_playbooks
+    playbooks = list_playbooks()
+    return {
+        "count": len(playbooks),
+        "playbooks": [
+            {
+                "playbook_id": pb.playbook_id,
+                "name": pb.name,
+                "description": pb.description,
+                "action_class": pb.action_class,
+                "auto_execute_eligible": pb.auto_execute_eligible,
+                "estimated_resolution_minutes": pb.estimated_resolution_minutes,
+                "target_technology": pb.target_technology,
+                "anomaly_types_addressed": pb.anomaly_types_addressed,
+                "pre_validation_checks": pb.pre_validation_checks,
+                "success_metrics": pb.success_metrics,
+                "rollback_playbook_id": pb.rollback_playbook_id,
+                "parameters": dict(pb.parameters),
+                "version": pb.version,
+            }
+            for pb in playbooks
+        ],
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # WebSocket endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -655,7 +1062,8 @@ async def websocket_incidents(websocket: WebSocket, client_id: str) -> None:
 
     # Send current active incidents immediately on connect
     current = [
-        state for state in _active_incidents.values()
+        _serialize_incident_state(tid, state)
+        for tid, state in _active_incidents.items()
         if state.get("client_id") == client_id
     ]
     if current:
@@ -899,11 +1307,7 @@ async def _handle_incident_package(package: dict[str, Any], client_id: str) -> N
         # Broadcast new incident to WebSocket subscribers
         await incident_manager.send_to_client(client_id, {
             "type": "new_incident",
-            "thread_id": thread_id,
-            "incident_id": state.get("incident_id"),
-            "priority": state.get("incident_priority"),
-            "routing_decision": state.get("routing_decision"),
-            "composite_confidence_score": state.get("composite_confidence_score"),
+            **_serialize_incident_state(thread_id, state),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         await activity_manager.broadcast({
@@ -1408,6 +1812,51 @@ def _validate_client_id(client_id: str) -> None:
         raise HTTPException(
             status_code=422,
             detail=f"Unknown client_id: '{client_id}'. Not registered in ATLAS.",
+        )
+
+
+def _normalize_atlas_role(raw_role: str) -> str:
+    """Normalize user role value supplied via request header."""
+    return raw_role.strip().upper()
+
+
+def _require_atlas_role(
+    request: Request,
+    allowed_roles: frozenset[str],
+) -> tuple[str, str]:
+    """
+    Enforce role headers for mutation/detail APIs without introducing login auth.
+
+    Returns:
+        Tuple of (normalized_role, header_actor)
+    """
+    header_role = _normalize_atlas_role(str(request.headers.get("x-atlas-role") or ""))
+    if not header_role:
+        raise HTTPException(status_code=403, detail="X-ATLAS-ROLE header is required.")
+
+    if header_role not in _KNOWN_ATLAS_ROLES:
+        raise HTTPException(status_code=403, detail="X-ATLAS-ROLE value is not recognized.")
+
+    if header_role not in allowed_roles:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{header_role}' is not allowed for this operation.",
+        )
+
+    header_actor = str(request.headers.get("x-atlas-user") or "").strip()
+    return header_role, header_actor
+
+
+def _enforce_actor_header_match(header_actor: str, payload_actor: str, actor_field: str) -> None:
+    """Reject requests where payload actor is blank or mismatches declared header actor."""
+    normalized_payload_actor = str(payload_actor).strip()
+    if not normalized_payload_actor:
+        raise HTTPException(status_code=422, detail=f"{actor_field} is required.")
+
+    if header_actor and header_actor.casefold() != normalized_payload_actor.casefold():
+        raise HTTPException(
+            status_code=403,
+            detail=f"{actor_field} does not match X-ATLAS-USER header.",
         )
 
 

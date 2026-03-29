@@ -1,6 +1,7 @@
-import { LayoutDashboard, AlertCircle, BookOpen, FileText, Settings, Shield, LogOut } from 'lucide-react';
+import { LayoutDashboard, AlertCircle, BookOpen, FileText, Settings, LogOut, Wifi, WifiOff, Shield } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAtlasData } from '@/contexts/AtlasDataContext';
 import { cn } from '@/lib/utils';
 import { StatusIndicator } from './StatusIndicator';
 import type { UserRole } from '@/types/atlas';
@@ -27,6 +28,18 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const role = user?.role || 'L2';
   const visibleItems = navItems.filter(item => item.roles.includes(role as UserRole));
+  const { backendConnected, incidents } = useAtlasData();
+  const safeIncidents = incidents ?? [];
+  const activeCount = safeIncidents.filter(i => i.status !== 'Resolved').length;
+  const p1Active = safeIncidents.some(i => i.priority === 'P1' && i.status !== 'Resolved');
+  const systemHealth = !backendConnected ? 'healthy' : activeCount === 0 ? 'healthy' : p1Active ? 'critical' : 'warning';
+  const systemLabel = !backendConnected
+    ? 'Demo mode'
+    : systemHealth === 'healthy'
+    ? 'All systems operational'
+    : systemHealth === 'critical'
+    ? `${activeCount} critical incident${activeCount !== 1 ? 's' : ''}`
+    : `${activeCount} active incident${activeCount !== 1 ? 's' : ''}`;
 
   const handleLogout = () => {
     logout();
@@ -38,17 +51,13 @@ export function AppSidebar() {
       {/* Wordmark */}
       <div className="px-5 pt-5 pb-5">
         <div className="flex items-center gap-2.5">
-          <svg className="h-9 w-9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="36" height="36" rx="8" fill="#7B61FF"/>
-            <path d="M18 8 L28 28 L18 24 L8 28 Z" fill="url(#atlasGrad)" opacity="0.95"/>
-            <path d="M18 10 L24 24 L18 21 L12 24 Z" fill="#0A0E17"/>
-            <circle cx="18" cy="16" r="3" fill="#00D4FF"/>
-            <defs>
-              <linearGradient id="atlasGrad" x1="18" y1="8" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#00D4FF"/>
-                <stop offset="1" stop-color="#7B61FF"/>
-              </linearGradient>
-            </defs>
+          <svg className="h-9 w-9 shrink-0" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="36" height="36" rx="7" fill="#1a2744"/>
+            {/* Signal arcs */}
+            <path d="M18 26 L10 26 L18 10 L26 26 Z" fill="none" stroke="#0066CC" strokeWidth="1.8" strokeLinejoin="round"/>
+            <path d="M18 26 L14 26 L18 18 L22 26 Z" fill="#0066CC"/>
+            {/* Apex dot */}
+            <circle cx="18" cy="10" r="1.8" fill="#38bdf8"/>
           </svg>
           <div>
             <h1 className="text-[15px] font-bold tracking-[0.15em] leading-none text-primary-foreground">ATLAS</h1>
@@ -80,6 +89,14 @@ export function AppSidebar() {
               >
                 <item.icon className="h-4 w-4" />
                 {item.label}
+                {item.path === '/incidents' && activeCount > 0 && (
+                  <span className={cn(
+                    'ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full tabular-nums',
+                    p1Active ? 'bg-status-critical text-white' : 'bg-status-warning/20 text-status-warning',
+                  )}>
+                    {activeCount}
+                  </span>
+                )}
               </NavLink>
             </li>
           ))}
@@ -111,8 +128,12 @@ export function AppSidebar() {
       {/* System health */}
       <div className="px-5 py-3 border-t border-sidebar-border">
         <div className="flex items-center gap-2">
-          <StatusIndicator status="healthy" />
-          <span className="text-[10px] text-primary-foreground/40">All systems operational</span>
+          {backendConnected ? (
+            <StatusIndicator status={systemHealth} />
+          ) : (
+            <WifiOff className="h-2 w-2 text-primary-foreground/30" />
+          )}
+          <span className="text-[10px] text-primary-foreground/40">{systemLabel}</span>
         </div>
       </div>
     </aside>

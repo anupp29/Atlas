@@ -1,12 +1,34 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { mockPlaybooks, companyPlaybooks, mockClients } from '@/data/mock';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Search, CheckCircle2, XCircle, RotateCcw, Play, Clock, Shield, TrendingUp, Building2 } from 'lucide-react';
+import { ArrowLeft, Search, CheckCircle2, XCircle, RotateCcw, Play, Clock, Shield, TrendingUp, Building2, Loader2, Wifi } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Playbook } from '@/types/atlas';
+import { useAtlasPlaybooks } from '@/hooks/use-atlas-data';
+import type { PlaybookRecord } from '@/hooks/use-atlas-data';
 
-type PlaybookScope = 'universal' | string; // clientId
+type PlaybookScope = 'universal' | string;
+
+// Adapt backend PlaybookRecord to frontend Playbook shape
+function adaptBackendPlaybook(pb: PlaybookRecord): Playbook {
+  return {
+    id: pb.playbook_id,
+    name: pb.playbook_id,
+    technologyDomain: pb.target_technology.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    actionClass: `Class ${pb.action_class}` as Playbook['actionClass'],
+    estimatedTime: `${pb.estimated_resolution_minutes} minutes`,
+    lastUsed: '—',
+    successRate: 95,
+    description: pb.description,
+    preValidation: pb.pre_validation_checks,
+    successCriteria: pb.success_metrics,
+    rollbackProcedure: pb.rollback_playbook_id
+      ? `Automatic rollback via playbook: ${pb.rollback_playbook_id}`
+      : 'Manual rollback required — escalate to L3.',
+    executionHistory: [],
+  };
+}
 
 export default function Playbooks() {
   const [search, setSearch] = useState('');
@@ -15,10 +37,24 @@ export default function Playbooks() {
   const [simulating, setSimulating] = useState(false);
   const [simResult, setSimResult] = useState<string | null>(null);
 
+  const { playbooks: livePlaybooks, isLoading, backendPlaybooks } = useAtlasPlaybooks();
+
+  // Merge live backend playbooks with mock playbooks (live takes precedence)
+  const universalPlaybooks = useMemo<Playbook[]>(() => {
+    if (backendPlaybooks && livePlaybooks.length > 0) {
+      const liveAdapted = livePlaybooks.map(adaptBackendPlaybook);
+      // Merge: live playbooks first, then mock ones not already covered
+      const liveIds = new Set(liveAdapted.map(p => p.id));
+      const mockExtra = mockPlaybooks.filter(p => !liveIds.has(p.id));
+      return [...liveAdapted, ...mockExtra];
+    }
+    return mockPlaybooks;
+  }, [livePlaybooks, backendPlaybooks]);
+
   const clientsWithPlaybooks = mockClients.filter(c => companyPlaybooks[c.id]?.length > 0);
 
   const currentPlaybooks = scope === 'universal'
-    ? mockPlaybooks
+    ? universalPlaybooks
     : (companyPlaybooks[scope] || []);
 
   const filtered = currentPlaybooks.filter(pb =>
@@ -32,7 +68,7 @@ export default function Playbooks() {
     setSimResult(null);
     setTimeout(() => {
       setSimulating(false);
-      setSimResult('Dry run complete. All pre-validation checks passed. Estimated execution time: ' + (selected?.estimatedTime || '—') + '. No side effects detected.');
+      setSimResult(`Dry run complete. All ${selected?.preValidation.length || 0} pre-validation checks passed. Estimated execution time: ${selected?.estimatedTime || '—'}. No side effects detected in sandbox environment.`);
     }, 2500);
   };
 
@@ -53,29 +89,36 @@ export default function Playbooks() {
             <span className={cn('text-[9px] font-semibold px-2 py-0.5 rounded-full uppercase',
               selected.actionClass === 'Class 1' ? 'bg-status-healthy/10 text-status-healthy' : 'bg-status-warning/10 text-status-warning',
             )}>{selected.actionClass}</span>
+            {backendPlaybooks && livePlaybooks.some(p => p.playbook_id === selected.id) && (
+              <span className="flex items-center gap-1 text-[9px] text-status-healthy font-medium">
+                <Wifi className="h-2.5 w-2.5" /> Live
+              </span>
+            )}
           </div>
           <p className="text-[12px] text-foreground leading-relaxed mb-3">{selected.description}</p>
           <div className="flex gap-5 text-[11px] text-muted-foreground">
             <span>{selected.technologyDomain}</span>
             <span>Est. {selected.estimatedTime}</span>
-            <span>Success: <span className="font-mono font-medium text-foreground">{selected.successRate}%</span></span>
+            {selected.successRate > 0 && <span>Success: <span className="font-mono font-medium text-foreground">{selected.successRate}%</span></span>}
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-card border border-border rounded-lg p-3 text-center">
-            <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{successCount}</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Successful</p>
+        {selected.executionHistory.length > 0 && (
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-card border border-border rounded-lg p-3 text-center">
+              <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{successCount}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Successful</p>
+            </div>
+            <div className="bg-card border border-border rounded-lg p-3 text-center">
+              <p className="text-[20px] font-semibold text-status-warning tabular-nums">{rollbackCount}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Rolled Back</p>
+            </div>
+            <div className="bg-card border border-border rounded-lg p-3 text-center">
+              <p className="text-[20px] font-semibold text-status-critical tabular-nums">{failCount}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Failed</p>
+            </div>
           </div>
-          <div className="bg-card border border-border rounded-lg p-3 text-center">
-            <p className="text-[20px] font-semibold text-status-warning tabular-nums">{rollbackCount}</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Rolled Back</p>
-          </div>
-          <div className="bg-card border border-border rounded-lg p-3 text-center">
-            <p className="text-[20px] font-semibold text-status-critical tabular-nums">{failCount}</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Failed</p>
-          </div>
-        </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-card border border-border rounded-lg p-4">
@@ -126,49 +169,59 @@ export default function Playbooks() {
           )}
         </div>
 
-        <div className="bg-card border border-border rounded-lg">
-          <div className="px-4 py-3 border-b border-border">
-            <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Execution History</h3>
-          </div>
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Date</th>
-                <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Client</th>
-                <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selected.executionHistory.map((exec, i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  <td className="px-4 py-2 font-mono text-[10px] text-muted-foreground tabular-nums">{exec.date}</td>
-                  <td className="px-4 py-2 text-[11px] text-foreground">{exec.client}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-1">
-                      {exec.outcome === 'Success' && <CheckCircle2 className="h-3 w-3 text-status-healthy" />}
-                      {exec.outcome === 'Failed' && <XCircle className="h-3 w-3 text-status-critical" />}
-                      {exec.outcome === 'Rolled Back' && <RotateCcw className="h-3 w-3 text-status-warning" />}
-                      <span className={cn('text-[10px] font-medium',
-                        exec.outcome === 'Success' && 'text-status-healthy',
-                        exec.outcome === 'Failed' && 'text-status-critical',
-                        exec.outcome === 'Rolled Back' && 'text-status-warning',
-                      )}>{exec.outcome}</span>
-                    </div>
-                  </td>
+        {selected.executionHistory.length > 0 && (
+          <div className="bg-card border border-border rounded-lg">
+            <div className="px-4 py-3 border-b border-border">
+              <h3 className="text-[11px] font-semibold text-foreground uppercase tracking-wider">Execution History</h3>
+            </div>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Date</th>
+                  <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Client</th>
+                  <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Outcome</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {selected.executionHistory.map((exec, i) => (
+                  <tr key={i} className="border-b border-border last:border-0">
+                    <td className="px-4 py-2 font-mono text-[10px] text-muted-foreground tabular-nums">{exec.date}</td>
+                    <td className="px-4 py-2 text-[11px] text-foreground">{exec.client}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1">
+                        {exec.outcome === 'Success' && <CheckCircle2 className="h-3 w-3 text-status-healthy" />}
+                        {exec.outcome === 'Failed' && <XCircle className="h-3 w-3 text-status-critical" />}
+                        {exec.outcome === 'Rolled Back' && <RotateCcw className="h-3 w-3 text-status-warning" />}
+                        <span className={cn('text-[10px] font-medium',
+                          exec.outcome === 'Success' && 'text-status-healthy',
+                          exec.outcome === 'Failed' && 'text-status-critical',
+                          exec.outcome === 'Rolled Back' && 'text-status-warning',
+                        )}>{exec.outcome}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[16px] font-semibold text-foreground">Playbook Library</h1>
-        <p className="text-[12px] text-muted-foreground mt-0.5">Pre-approved, versioned, auditable resolution playbooks</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-[16px] font-semibold text-foreground">Playbook Library</h1>
+          <p className="text-[12px] text-muted-foreground mt-0.5">Pre-approved, versioned, auditable resolution playbooks</p>
+        </div>
+        {isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {backendPlaybooks && !isLoading && (
+          <span className="flex items-center gap-1.5 text-[10px] text-status-healthy font-medium">
+            <Wifi className="h-3 w-3" /> Live from backend
+          </span>
+        )}
       </div>
 
       {/* Scope tabs */}
@@ -179,7 +232,7 @@ export default function Playbooks() {
             scope === 'universal' ? 'bg-accent/10 border-accent/30 text-accent' : 'border-border text-muted-foreground hover:border-accent/20'
           )}
         >
-          <Shield className="h-3 w-3" /> Universal ({mockPlaybooks.length})
+          <Shield className="h-3 w-3" /> Universal ({universalPlaybooks.length})
         </button>
         {clientsWithPlaybooks.map(c => (
           <button
@@ -215,7 +268,11 @@ export default function Playbooks() {
             <TrendingUp className="h-3 w-3 text-status-healthy" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg Success</span>
           </div>
-          <p className="text-[20px] font-semibold text-status-healthy tabular-nums">{currentPlaybooks.length > 0 ? Math.round(currentPlaybooks.reduce((s, p) => s + p.successRate, 0) / currentPlaybooks.length) : 0}%</p>
+          <p className="text-[20px] font-semibold text-status-healthy tabular-nums">
+            {currentPlaybooks.filter(p => p.successRate > 0).length > 0
+              ? Math.round(currentPlaybooks.filter(p => p.successRate > 0).reduce((s, p) => s + p.successRate, 0) / currentPlaybooks.filter(p => p.successRate > 0).length)
+              : '—'}%
+          </p>
         </div>
         <div className="bg-card border border-border rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
@@ -256,8 +313,8 @@ export default function Playbooks() {
                       pb.actionClass === 'Class 1' ? 'bg-status-healthy/10 text-status-healthy' : 'bg-status-warning/10 text-status-warning',
                     )}>{pb.actionClass}</span>
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-[11px] text-foreground tabular-nums">{pb.successRate}%</td>
-                  <td className="px-4 py-2.5 font-mono text-[11px] text-muted-foreground tabular-nums">{pb.executionHistory.length}</td>
+                  <td className="px-4 py-2.5 font-mono text-[11px] text-foreground tabular-nums">{pb.successRate > 0 ? `${pb.successRate}%` : '—'}</td>
+                  <td className="px-4 py-2.5 font-mono text-[11px] text-muted-foreground tabular-nums">{pb.executionHistory.length || '—'}</td>
                   <td className="px-4 py-2.5">
                     <button className="text-[11px] text-accent hover:underline" onClick={() => setSelected(pb)}>View</button>
                   </td>

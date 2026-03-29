@@ -22,11 +22,23 @@ export type IncidentStatus =
 
 export type ActionClass = 'Class 1' | 'Class 2' | 'Class 3';
 
+export type IncidentPipelineStage = 'ingest' | 'detect' | 'correlate' | 'search' | 'reason' | 'select' | 'route' | 'act' | 'learn';
+
+export interface IncidentStageTimelineEntry {
+  stage: IncidentPipelineStage;
+  label: string;
+  status: 'completed' | 'active' | 'pending' | 'blocked';
+  timestamp?: string;
+  reason: string;
+  changedFields?: string[];
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
   role: UserRole;
+  homeRole?: UserRole;
 }
 
 export interface Client {
@@ -72,6 +84,13 @@ export interface Incident {
   resolvedAt?: string;
   mttr?: string;
   approvedBy?: string;
+  // Backend integration fields — present for live incidents
+  threadId?: string;
+  backendClientId?: string;
+  pipelineStage?: IncidentPipelineStage;
+  stageTimeline?: IncidentStageTimelineEntry[];
+  engineerExplanation?: string;
+  serviceNowTicketId?: string;
 }
 
 export interface DeploymentCorrelation {

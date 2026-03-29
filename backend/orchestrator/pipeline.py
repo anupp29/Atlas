@@ -47,6 +47,18 @@ logger = structlog.get_logger(__name__)
 
 _activity_broadcast_fn: Any = None
 
+_NODE_STAGE_MAP: dict[str, str] = {
+    "n1_classifier": "detect",
+    "n2_itsm": "route",
+    "n3_graph": "correlate",
+    "n4_semantic": "search",
+    "n5_reasoning": "reason",
+    "n6_confidence": "select",
+    "n7_router": "route",
+    "execute_playbook": "act",
+    "n_learn": "learn",
+}
+
 
 def register_activity_broadcast(fn: Any) -> None:
     """Register the activity broadcast function from main.py."""
@@ -84,6 +96,7 @@ async def _broadcast_node_activity(
             "n_learn": "Learning engine updated",
         }
         message = _NODE_MESSAGES.get(node_name, f"Node {node_name} complete")
+        changed_fields = sorted(str(key) for key in updates.keys())
         await _activity_broadcast_fn(
             {
                 "type": "orchestrator_node",
@@ -95,6 +108,8 @@ async def _broadcast_node_activity(
                 "meta": {
                     "node": node_name,
                     "incident_id": incident_id,
+                    "stage": _NODE_STAGE_MAP.get(node_name, "unknown"),
+                    "changed_fields": changed_fields,
                 },
             }
         )
@@ -724,6 +739,16 @@ async def resume_after_approval(
 
     await graph.aupdate_state(config, human_update)
 
+    client_id = ""
+    incident_id = ""
+    try:
+        pre_resume_snapshot = await graph.aget_state(config)
+        if pre_resume_snapshot and pre_resume_snapshot.values:
+            client_id = str(pre_resume_snapshot.values.get("client_id") or "")
+            incident_id = str(pre_resume_snapshot.values.get("incident_id") or "")
+    except Exception as exc:
+        logger.debug("pipeline.pre_resume_snapshot_fetch_failed", thread_id=thread_id, error=str(exc))
+
     logger.info(
         "pipeline.resuming_after_human",
         thread_id=thread_id,
@@ -749,6 +774,17 @@ async def resume_after_approval(
             if isinstance(updates, dict):
                 final_state.update(updates)
                 logger.debug("pipeline.node_complete_after_resume", node=node_name)
+                if not client_id:
+                    client_id = str(final_state.get("client_id") or "")
+                if not incident_id:
+                    incident_id = str(final_state.get("incident_id") or "")
+                if client_id and incident_id:
+                    await _broadcast_node_activity(
+                        node_name=node_name,
+                        updates=updates,
+                        client_id=client_id,
+                        incident_id=incident_id,
+                    )
 
     # Fetch full persisted state — authoritative after resume
     try:

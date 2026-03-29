@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { Brain, Zap, Search, GitBranch, Shield, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Incident } from '@/types/atlas';
@@ -12,7 +12,6 @@ interface ThinkingStep {
   id: string;
   icon: React.ElementType;
   label: string;
-  status: 'complete' | 'active' | 'pending';
   duration: string;
   detail: string;
   subSteps?: string[];
@@ -20,16 +19,16 @@ interface ThinkingStep {
 
 export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoningPanelProps) {
   const [expanded, setExpanded] = useState(showFullDetail);
-  const [animatedSteps, setAnimatedSteps] = useState<number>(0);
+  const [animatedSteps, setAnimatedSteps] = useState(0);
 
-  const thinkingSteps: ThinkingStep[] = [
+  // Memoize so the array reference is stable — prevents useEffect from re-running on every render
+  const thinkingSteps: ThinkingStep[] = useMemo(() => [
     {
       id: 'ingest',
       icon: Zap,
       label: 'Signal Ingestion',
-      status: 'complete',
       duration: '0.3s',
-      detail: `Received ${incident.services.length} metric streams. Anomaly threshold breached on ${incident.services.filter(s => s.health !== 'healthy').map(s => s.name).join(', ')}.`,
+      detail: `Received ${incident.services.length} metric streams. Anomaly threshold breached on ${incident.services.filter(s => s.health !== 'healthy').map(s => s.name).join(', ') || 'monitored services'}.`,
       subSteps: [
         `Ingested ${incident.services.length * 14} metric data points across ${incident.services.length} services`,
         `Noise filter eliminated 23 transient spikes (< 30s duration)`,
@@ -40,7 +39,6 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
       id: 'correlate',
       icon: GitBranch,
       label: 'Dependency Correlation',
-      status: 'complete',
       duration: '1.2s',
       detail: `Traversed service dependency graph (${incident.services.length} nodes, ${incident.services.length * 2} edges). Identified causal chain.`,
       subSteps: [
@@ -55,7 +53,6 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
       id: 'match',
       icon: Search,
       label: 'Knowledge Base Search',
-      status: 'complete',
       duration: '0.8s',
       detail: incident.historicalMatch
         ? `Found historical precedent ${incident.historicalMatch.incidentId} with ${incident.historicalMatch.similarity}% similarity.`
@@ -73,14 +70,13 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
       id: 'reason',
       icon: Brain,
       label: 'Root Cause Reasoning',
-      status: 'complete',
       duration: '2.1s',
-      detail: `Diagnosis: ${incident.rootCause.diagnosis} (${incident.rootCause.confidence}% confidence)`,
+      detail: `Diagnosis: ${incident.rootCause.diagnosis.slice(0, 120)}${incident.rootCause.diagnosis.length > 120 ? '…' : ''} (${incident.rootCause.confidence}% confidence)`,
       subSteps: [
         `Evaluated ${2 + incident.alternativeHypotheses.length} candidate hypotheses`,
         `Primary hypothesis scored ${incident.rootCause.confidence}% — factors: historical ${incident.rootCause.factors.historicalAccuracy}%, certainty ${incident.rootCause.factors.rootCauseCertainty}%, safety ${incident.rootCause.factors.actionSafetyClass}%, freshness ${incident.rootCause.factors.evidenceFreshness}%`,
         ...incident.alternativeHypotheses.map((alt, i) =>
-          `Rejected hypothesis ${i + 1}: "${alt.hypothesis}" — ${alt.evidenceAgainst.length} contra-indicators`
+          `Rejected hypothesis ${i + 1}: "${alt.hypothesis}" — ${alt.evidenceAgainst.length} contra-indicators`,
         ),
         `Final diagnosis locked at ${incident.rootCause.confidence}% confidence`,
       ],
@@ -89,7 +85,6 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
       id: 'select',
       icon: Shield,
       label: 'Action Selection & Governance',
-      status: 'complete',
       duration: '0.4s',
       detail: `Selected playbook ${incident.recommendedAction.playbookName}. Risk: ${incident.recommendedAction.riskClass}. Rollback: ${incident.recommendedAction.rollbackAvailable ? 'Available' : 'Manual'}.`,
       subSteps: [
@@ -99,20 +94,25 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
         `Rollback procedure: ${incident.recommendedAction.rollbackAvailable ? 'Automated rollback available' : 'Manual rollback required'}`,
       ],
     },
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [incident.id]); // Re-compute only when incident changes, not on every render
 
+  // Reset animation when incident changes
   useEffect(() => {
-    if (animatedSteps < thinkingSteps.length) {
-      const timer = setTimeout(() => setAnimatedSteps(prev => prev + 1), 200);
-      return () => clearTimeout(timer);
-    }
+    setAnimatedSteps(0);
+  }, [incident.id]);
+
+  // Animate steps in one at a time — stable because thinkingSteps.length is stable
+  useEffect(() => {
+    if (animatedSteps >= thinkingSteps.length) return;
+    const timer = setTimeout(() => setAnimatedSteps(prev => prev + 1), 200);
+    return () => clearTimeout(timer);
   }, [animatedSteps, thinkingSteps.length]);
 
   const totalTime = thinkingSteps.reduce((sum, s) => sum + parseFloat(s.duration), 0);
 
   return (
     <div className="bg-card border border-border rounded-lg shadow-atlas overflow-hidden">
-      {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors"
@@ -140,7 +140,6 @@ export function AIReasoningPanel({ incident, showFullDetail = false }: AIReasoni
         </div>
       </button>
 
-      {/* Steps */}
       {expanded && (
         <div className="border-t border-border">
           {thinkingSteps.map((step, i) => (
