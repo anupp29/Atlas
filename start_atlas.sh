@@ -57,9 +57,9 @@ command -v node &>/dev/null && ok "Node.js → $(node --version)" || err "Node.j
 [[ -f "$ROOT/.env" ]] && ok ".env    → found" || err ".env not found at repo root."
 
 # node_modules
-if [[ ! -d "$ROOT/ui-atlas/node_modules" ]]; then
-    warn "ui-atlas/node_modules missing — running npm install..."
-    (cd "$ROOT/ui-atlas" && npm install --silent)
+if [[ ! -d "$ROOT/ui/node_modules" ]]; then
+    warn "ui/node_modules missing — running npm install..."
+    (cd "$ROOT/ui" && npm install --silent)
     ok "npm install complete"
 fi
 
@@ -111,7 +111,7 @@ sleep 0.4
 
 # 3 — Frontend
 ok "Starting Frontend (port $FRONTEND_PORT)..."
-open_tab "ATLAS Frontend" "$ROOT/ui-atlas" \
+open_tab "ATLAS Frontend" "$ROOT/ui" \
     "npm run dev -- --port $FRONTEND_PORT"
 sleep 0.4
 

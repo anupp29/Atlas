@@ -82,13 +82,13 @@ REQUIRED_ENV_VARS: list[tuple[str, str]] = [
     ("SERVICENOW_USERNAME",    "ServiceNow admin username"),
     ("SERVICENOW_PASSWORD",    "ServiceNow admin password"),
     ("ATLAS_SECRET_KEY",       "Cryptographic token signing key (min 32 chars)"),
-    ("ATLAS_LLM_ENDPOINT",     "Internal LLM reasoning endpoint URL"),
     ("ATLAS_AUDIT_DB_PATH",    "SQLite audit database path"),
     ("ATLAS_DECISION_DB_PATH", "SQLite decision history database path"),
     ("ATLAS_CHECKPOINT_DB_PATH","LangGraph checkpoint database path"),
 ]
 
 OPTIONAL_ENV_VARS: list[tuple[str, str]] = [
+    ("ATLAS_LLM_ENDPOINT",     "Optional override for LLM endpoint (default: http://localhost:8000/internal/llm/reason)"),
     # Ollama is the primary LLM path — ANTHROPIC_API_KEY is the Claude fallback
     ("ANTHROPIC_API_KEY",      "Claude API key (fallback LLM — Ollama is primary)"),
     ("OLLAMA_BASE_URL",        "Ollama base URL (primary LLM, default: http://localhost:11434)"),
@@ -1093,7 +1093,6 @@ for ws_path in REQUIRED_WS_PATHS:
 # Startup env var validation
 CRITICAL_STARTUP_VARS: list[str] = [
     "NEO4J_URI",
-    "ATLAS_LLM_ENDPOINT",
     "ATLAS_SECRET_KEY",
     "ATLAS_CHECKPOINT_DB_PATH",
 ]

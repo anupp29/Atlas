@@ -4,7 +4,10 @@ Runs at POST /internal/llm/reason.
 Receives the structured context payload from n5_reasoning.py and returns
 the validated JSON schema ATLAS expects.
 
-Start with: uvicorn backend.llm.cerebras_server:app --port 8000
+Optional standalone mode:
+    uvicorn backend.llm.cerebras_server:app --port 8001
+
+Default ATLAS runtime uses single-service mode via backend.main.
 """
 
 from __future__ import annotations

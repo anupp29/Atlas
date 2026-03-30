@@ -814,7 +814,18 @@ async def get_incident_state(thread_id: str) -> dict[str, Any] | None:
     config = {"configurable": {"thread_id": thread_id}}
     try:
         snapshot = await graph.aget_state(config)
-        return dict(snapshot.values) if snapshot else None
+        if not snapshot or not snapshot.values:
+            return None
+
+        values = dict(snapshot.values)
+        # Some checkpointers may return an empty/default snapshot for unknown
+        # thread IDs. Treat these as missing incidents instead of valid state.
+        if not values:
+            return None
+        if not values.get("incident_id") and not values.get("client_id"):
+            return None
+
+        return values
     except Exception as exc:
         logger.error("pipeline.get_state_failed", thread_id=thread_id, error=str(exc))
         return None

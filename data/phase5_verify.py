@@ -232,7 +232,7 @@ for ws_path in ["/ws/logs/{client_id}", "/ws/incidents/{client_id}", "/ws/activi
     assert ws_path in all_paths, f"Missing WebSocket: {ws_path}"
 ok("main: all 3 WebSocket endpoints registered")
 
-for required in ["NEO4J_URI", "ATLAS_LLM_ENDPOINT", "ATLAS_SECRET_KEY", "ATLAS_CHECKPOINT_DB_PATH"]:
+for required in ["NEO4J_URI", "ATLAS_SECRET_KEY", "ATLAS_CHECKPOINT_DB_PATH"]:
     assert required in _REQUIRED_ENV_VARS, f"{required} missing from startup checks"
 ok(f"main: {len(_REQUIRED_ENV_VARS)} required env vars validated at startup")
 

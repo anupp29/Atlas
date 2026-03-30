@@ -1,8 +1,10 @@
 # backend/llm
 
-Internal LLM reasoning server. Runs as a **separate process on port 8001**, independent of the main FastAPI backend on port 8000.
+Optional standalone LLM service for ATLAS.
 
-The main backend's N5 node posts incident context to this server at `ATLAS_LLM_ENDPOINT`. This server calls the configured LLM and returns structured JSON reasoning output.
+The default runtime mode is **single-service**: `backend.main` serves `POST /internal/llm/reason` directly on port 8000.
+
+Use this folder only if you explicitly want to run the LLM endpoint as a separate process.
 
 ---
 
@@ -14,30 +16,29 @@ The main backend's N5 node posts incident context to this server at `ATLAS_LLM_E
 
 ---
 
-## Why it is a separate process
+## Runtime modes
 
-The LLM server is decoupled from the main backend so that:
-- LLM failures never crash the main backend
-- The LLM server can be restarted independently without losing active incident state
-- Different LLM providers can be swapped by restarting only this process
+### Default: single-service
+
+- Start only `backend.main`
+- Keep `ATLAS_LLM_ENDPOINT` pointed to the backend URL, for example:
+
+```
+ATLAS_LLM_ENDPOINT=http://localhost:8000/internal/llm/reason
+```
+
+### Optional: standalone LLM service
+
+- Run `backend.llm.cerebras_server` separately
+- Point `ATLAS_LLM_ENDPOINT` to that standalone service URL
 
 ---
 
-## Starting the LLM server
+## Starting the standalone LLM server
 
 ```bash
-# Must be started before the main backend
+# Optional mode only
 uvicorn backend.llm.cerebras_server:app --port 8001
-```
-
-The main backend reads `ATLAS_LLM_ENDPOINT` from the environment. This must point to port 8001, not port 8000. Port 8000 is the main FastAPI backend — it does not serve the LLM reasoning endpoint.
-
-```
-# Correct
-ATLAS_LLM_ENDPOINT=http://localhost:8001/internal/llm/reason
-
-# Wrong — port 8000 is the main backend, not the LLM server
-ATLAS_LLM_ENDPOINT=http://localhost:8000/internal/llm/reason
 ```
 
 ---
@@ -84,6 +85,6 @@ The server must return JSON with all of these fields. N5 validates the response 
 # Verify Ollama is working before starting the server
 python scripts/test_ollama_qwen3.py
 
-# Test the full integration path (LLM server must be running)
+# Test the full integration path (backend.main must be running)
 python scripts/test_ollama_atlas_integration.py
 ```

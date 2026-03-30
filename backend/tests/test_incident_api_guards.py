@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend import main as atlas_main
+from backend.orchestrator import pipeline as orchestrator_pipeline
 
 
 @pytest.fixture(autouse=True)
@@ -100,3 +103,26 @@ async def test_modify_requires_l2_or_higher() -> None:
 
     assert response.status_code == 403
     assert "not allowed" in response.text
+
+
+@pytest.mark.asyncio
+async def test_incident_details_returns_404_for_empty_pipeline_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_incident_state(_thread_id: str) -> dict[str, object]:
+        await asyncio.sleep(0)
+        return {}
+
+    monkeypatch.setattr(orchestrator_pipeline, "get_incident_state", _fake_get_incident_state)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=atlas_main.app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/incidents/details/unknown-thread",
+            headers={"X-ATLAS-ROLE": "L2", "X-ATLAS-USER": "Atlas L2"},
+        )
+
+    assert response.status_code == 404
+    assert "not found" in response.text.lower()

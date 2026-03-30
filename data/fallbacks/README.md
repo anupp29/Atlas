@@ -26,12 +26,12 @@ Regenerate both files if any of the following change:
 To regenerate, make a real LLM call with the incident context and save the response:
 
 ```bash
-# Start the LLM server
-uvicorn backend.llm.cerebras_server:app --port 8001
+# Start the backend (single-service mode exposes /internal/llm/reason)
+uvicorn backend.main:app --port 8000
 
 # Trigger the FinanceCore scenario and capture the LLM response
 python scripts/trigger_financecore_e2e.py
-# The LLM server logs the full response — copy it to data/fallbacks/financecore_incident_response.json
+# The backend logs the full response — copy it to data/fallbacks/financecore_incident_response.json
 ```
 
 After regenerating, verify the files pass validation:

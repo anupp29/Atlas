@@ -30,6 +30,7 @@ logger = structlog.get_logger(__name__)
 _LLM_TIMEOUT: float = 8.0
 _FALLBACK_DIR = Path(__file__).parent.parent.parent.parent / "data" / "fallbacks"
 _MIN_EXPLANATION_CHARS: int = 50
+_DEFAULT_INTERNAL_LLM_ENDPOINT = "http://localhost:8000/internal/llm/reason"
 
 
 async def run(state: AtlasState) -> dict[str, Any]:
@@ -53,12 +54,9 @@ async def run(state: AtlasState) -> dict[str, Any]:
         incident_id=incident_id,
     )
 
-    llm_endpoint = os.environ.get("ATLAS_LLM_ENDPOINT", "")
+    llm_endpoint = os.environ.get("ATLAS_LLM_ENDPOINT", _DEFAULT_INTERNAL_LLM_ENDPOINT).strip()
     if not llm_endpoint:
-        raise RuntimeError(
-            "ATLAS_LLM_ENDPOINT environment variable is not set. "
-            "ATLAS cannot start without an LLM endpoint."
-        )
+        llm_endpoint = _DEFAULT_INTERNAL_LLM_ENDPOINT
 
     client_config = get_client(client_id)
     context_payload = _build_context_payload(state, client_config)

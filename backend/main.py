@@ -62,16 +62,17 @@ _REQUIRED_ENV_VARS: list[str] = [
     "SERVICENOW_USERNAME",
     "SERVICENOW_PASSWORD",
     "ATLAS_SECRET_KEY",
-    "ATLAS_LLM_ENDPOINT",
     "CHROMADB_PATH",
     "ATLAS_AUDIT_DB_PATH",
     "ATLAS_DECISION_DB_PATH",
     "ATLAS_CHECKPOINT_DB_PATH",
 ]
 
-# Optional — defaults are used if not set. Ollama is the primary LLM path.
+# Optional — defaults are used if not set.
+_CEREBRAS_MODEL_DEFAULT = "qwen-3-235b-a22b-instruct-2507"
 _OLLAMA_BASE_URL_DEFAULT = "http://localhost:11434"
 _OLLAMA_MODEL_DEFAULT = "qwen3-coder:480b-cloud"
+_DEFAULT_INTERNAL_LLM_ENDPOINT = "http://localhost:8000/internal/llm/reason"
 
 
 def _validate_env_vars() -> None:
@@ -79,7 +80,7 @@ def _validate_env_vars() -> None:
     missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:
         raise RuntimeError(
-            f"ATLAS startup failure: the following required environment variables are not set:\n"
+            "ATLAS startup failure: the following required environment variables are not set:\n"
             + "\n".join(f"  - {v}" for v in missing)
             + "\nSet all variables before starting ATLAS."
         )
@@ -248,7 +249,7 @@ async def _test_llm_endpoint() -> None:
     so a connectivity test during startup would be a self-ping before the server is
     fully initialised. Connectivity is implicitly verified on the first incident.
     """
-    endpoint = os.environ.get("ATLAS_LLM_ENDPOINT", "")
+    endpoint = os.environ.get("ATLAS_LLM_ENDPOINT", _DEFAULT_INTERNAL_LLM_ENDPOINT)
     logger.info(
         "atlas.startup.llm_endpoint_configured",
         endpoint=endpoint,
@@ -870,7 +871,9 @@ async def get_incident_details(
 
         state = await get_incident_state(thread_id)
 
-    if state is None:
+    if state is None or not state or (
+        not state.get("incident_id") and not state.get("client_id")
+    ):
         raise HTTPException(status_code=404, detail="Incident thread not found.")
 
     incident_client_id = str(state.get("client_id") or "")
@@ -1410,8 +1413,8 @@ _LLM_RESPONSE_SCHEMA = {
 async def internal_llm_reason(request: LLMReasonRequest) -> dict[str, Any]:
     """
     Internal ATLAS LLM reasoning endpoint.
-    Called by n5_reasoning.py. Calls Anthropic Claude with tool_use mode.
-    Falls back to pre-computed response files if Claude is unavailable.
+    Called by n5_reasoning.py.
+    Priority order: Cerebras (if configured) -> Ollama -> Claude -> fallback files.
     """
     import json as _json
     from pathlib import Path
@@ -1424,7 +1427,37 @@ async def internal_llm_reason(request: LLMReasonRequest) -> dict[str, Any]:
         incident_id=request.incident_context.get("incident_id", ""),
     )
 
-    # ── Attempt Ollama call (primary — qwen3-coder:480b-cloud) ──────────────────
+    # ── Attempt Cerebras call (primary when API key is configured) ──────────────
+    cerebras_key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+    cerebras_model = os.environ.get("CEREBRAS_MODEL", _CEREBRAS_MODEL_DEFAULT).strip()
+    if cerebras_key:
+        try:
+            result = await _call_cerebras(request, cerebras_key, cerebras_model, client_id)
+            if result:
+                action_id = result.get("recommended_action_id", "")
+                if action_id and not validate_action_id(action_id):
+                    logger.warning(
+                        "llm_endpoint.invalid_action_id_from_cerebras",
+                        action_id=action_id,
+                        client_id=client_id,
+                    )
+                    result["recommended_action_id"] = _infer_action_id(request)
+                logger.info(
+                    "llm_endpoint.cerebras_success",
+                    client_id=client_id,
+                    model=cerebras_model,
+                    action_id=result.get("recommended_action_id"),
+                )
+                return result
+        except Exception as exc:
+            logger.warning(
+                "llm_endpoint.cerebras_failed",
+                client_id=client_id,
+                model=cerebras_model,
+                error=str(exc),
+            )
+
+    # ── Attempt Ollama call (secondary) ─────────────────────────────────────────
     ollama_base = os.environ.get("OLLAMA_BASE_URL", _OLLAMA_BASE_URL_DEFAULT)
     ollama_model = os.environ.get("OLLAMA_MODEL", _OLLAMA_MODEL_DEFAULT)
     try:
@@ -1614,6 +1647,107 @@ async def _call_ollama(
                 parsed[field] = ""
 
     # Validate explanation length
+    explanation = parsed.get("explanation_for_engineer", "")
+    if len(explanation) < 50:
+        parsed["explanation_for_engineer"] = (
+            f"{explanation} ATLAS detected an anomaly requiring investigation. "
+            "Please review the evidence and recommended action."
+        )
+
+    return parsed
+
+
+async def _call_cerebras(
+    request: LLMReasonRequest,
+    api_key: str,
+    model: str,
+    client_id: str,
+) -> dict[str, Any] | None:
+    """Call Cerebras and return structured JSON matching the ATLAS schema."""
+    import json as _json
+
+    from cerebras.cloud.sdk import Cerebras  # type: ignore[import-not-found]
+
+    prompt = _build_claude_prompt(request)
+
+    system_msg = (
+        "You are ATLAS, an AIOps reasoning engine. "
+        "You MUST respond with ONLY valid JSON matching the exact schema provided. "
+        "No markdown, no explanation, no code fences - raw JSON only."
+    )
+
+    schema_instruction = (
+        "\n\nRespond with ONLY this JSON structure (no other text):\n"
+        "{\n"
+        '  "root_cause": "string",\n'
+        '  "confidence_factors": {},\n'
+        '  "recommended_action_id": "connection-pool-recovery-v2 or redis-memory-policy-rollback-v1",\n'
+        '  "alternative_hypotheses": [\n'
+        '    {"hypothesis": "string", "evidence_for": "string", "evidence_against": "string", "confidence": 0.0}\n'
+        "  ],\n"
+        '  "explanation_for_engineer": "string (min 50 chars, L2 level)",\n'
+        '  "technical_evidence_summary": "string"\n'
+        "}"
+    )
+
+    def _invoke() -> str:
+        client = Cerebras(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt + schema_instruction},
+            ],
+            temperature=0.1,
+            max_completion_tokens=2048,
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    raw_content = await asyncio.to_thread(_invoke)
+    if not raw_content:
+        return None
+
+    # Strip accidental markdown fences
+    if raw_content.startswith("```"):
+        raw_content = raw_content.split("```", maxsplit=2)[1]
+        if raw_content.startswith("json"):
+            raw_content = raw_content[4:]
+        raw_content = raw_content.strip()
+
+    try:
+        parsed = _json.loads(raw_content)
+    except _json.JSONDecodeError as exc:
+        logger.warning(
+            "llm_endpoint.cerebras_invalid_json",
+            client_id=client_id,
+            error=str(exc),
+            raw_preview=raw_content[:200],
+        )
+        return None
+
+    required = {
+        "root_cause",
+        "confidence_factors",
+        "recommended_action_id",
+        "alternative_hypotheses",
+        "explanation_for_engineer",
+        "technical_evidence_summary",
+    }
+    missing = required - set(parsed.keys())
+    if missing:
+        logger.warning(
+            "llm_endpoint.cerebras_missing_fields",
+            client_id=client_id,
+            missing=list(missing),
+        )
+        for field in missing:
+            if field == "confidence_factors":
+                parsed[field] = {}
+            elif field == "alternative_hypotheses":
+                parsed[field] = []
+            else:
+                parsed[field] = ""
+
     explanation = parsed.get("explanation_for_engineer", "")
     if len(explanation) < 50:
         parsed["explanation_for_engineer"] = (

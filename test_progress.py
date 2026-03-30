@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
+sys.path.insert(0, str(Path(__file__).parent / "IntegrationScripts"))
 
-from integrations.log_monitor import LogMonitor, LogSeverity, LogSource
-from integrations.github_repo_sync import GitHubRepoSync, GitHubConfig
-from integrations.integration_orchestrator import IntegrationOrchestrator, IntegrationConfig
+from log_monitor import LogSeverity, LogSource  # type: ignore[import-not-found]
+from integration_orchestrator import IntegrationOrchestrator, IntegrationConfig  # type: ignore[import-not-found]
 
 
 async def test_integration_scripts():
@@ -20,7 +20,9 @@ async def test_integration_scripts():
         github_db_path="data/test_github.db",
         github_token=None,
         github_owner=None,
-        github_repo=None
+        github_repo=None,
+        log_buffer_size=1,
+        log_flush_interval=0.2,
     )
     
     orchestrator = IntegrationOrchestrator(config)

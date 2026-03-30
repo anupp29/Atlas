@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bell, AlertTriangle, Clock, Search, Wifi, WifiOff, Activity } from 'lucide-react';
+import { Bell, AlertTriangle, Clock, Search, Wifi, WifiOff, Activity, Loader2, FlaskConical } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAtlasData } from '@/contexts/AtlasDataContext';
 import { CountdownTimer } from './CountdownTimer';
 import { PriorityBadge } from './PriorityBadge';
 import { ActivityDrawer } from './ActivityDrawer';
+import { injectFinanceCoreInstantFaultDemo } from '@/lib/atlas-api';
+import { toast } from 'sonner';
 
 const roleLabels = {
   L1: 'L1 Engineer',
@@ -27,10 +29,13 @@ export function TopBar() {
   const { incidents, activityFeed, backendConnected, isLoading } = useAtlasData();
   const p1Incidents = incidents.filter(i => i.priority === 'P1' && i.status !== 'Resolved');
   const activeCount = incidents.filter(i => i.status !== 'Resolved').length;
+  const activeIncidentLabel = activeCount === 1 ? 'incident' : 'incidents';
   const role = (user?.role || 'L2') as keyof typeof roleLabels;
+  const canInjectDemoFault = role !== 'CLIENT';
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [injectingDemoFault, setInjectingDemoFault] = useState(false);
   // Use a ref to track the feed length at the time the drawer was last closed/opened
   // This avoids the race condition where newCount could go negative
   const lastSeenLengthRef = useRef(0);
@@ -55,6 +60,67 @@ export function TopBar() {
     lastSeenLengthRef.current = activityFeed.length;
   };
 
+  const handleInjectDemoFault = async () => {
+    if (!backendConnected) {
+      toast.error('Backend not connected', {
+        description: 'Start the API service before running fault injection.',
+        position: 'bottom-right',
+      });
+      return;
+    }
+
+    if (injectingDemoFault) return;
+
+    setInjectingDemoFault(true);
+    const toastId = toast.loading('Injecting fault scripts for demo…', {
+      description: 'Sending FinanceCore instant fault payload to ATLAS ingest.',
+      position: 'bottom-right',
+      duration: Infinity,
+    });
+
+    try {
+      const result = await injectFinanceCoreInstantFaultDemo();
+      toast.success('Fault scripts injected', {
+        id: toastId,
+        description: `${result.sent} log lines accepted by backend.`,
+        position: 'bottom-right',
+        duration: 2200,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to inject demo fault.';
+      toast.error('Fault injection failed', {
+        id: toastId,
+        description: message,
+        position: 'bottom-right',
+        duration: 3500,
+      });
+    } finally {
+      setInjectingDemoFault(false);
+    }
+  };
+
+  const renderBackendStatus = () => {
+    if (isLoading) {
+      return <span className="text-[10px] text-muted-foreground">connecting…</span>;
+    }
+
+    if (backendConnected) {
+      return (
+        <>
+          <Wifi className="h-3 w-3 text-status-healthy" />
+          <span className="text-[10px] text-status-healthy font-medium">Live</span>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <WifiOff className="h-3 w-3 text-muted-foreground" />
+        <span className="text-[10px] text-muted-foreground">Demo</span>
+      </>
+    );
+  };
+
   return (
     <>
       <header className="h-14 border-b border-border bg-card flex items-center justify-between px-5 shrink-0 z-30 relative">
@@ -77,7 +143,7 @@ export function TopBar() {
           ))}
 
           {p1Incidents.length === 0 && activeCount > 0 && (
-            <span className="text-[12px] text-muted-foreground">{activeCount} active incident{activeCount !== 1 ? 's' : ''}</span>
+            <span className="text-[12px] text-muted-foreground">{activeCount} active {activeIncidentLabel}</span>
           )}
           {activeCount === 0 && (
             <span className="text-[12px] text-muted-foreground">All clear — no active incidents</span>
@@ -85,6 +151,22 @@ export function TopBar() {
         </div>
 
         <div className="flex items-center gap-2">
+          {canInjectDemoFault && (
+            <button
+              onClick={handleInjectDemoFault}
+              disabled={injectingDemoFault}
+              className="h-8 px-2.5 rounded-lg border border-border bg-background hover:bg-muted transition-colors duration-150 flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Inject FinanceCore fault script for demo"
+            >
+              {injectingDemoFault ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-status-warning" />
+              ) : (
+                <FlaskConical className="h-3.5 w-3.5 text-status-warning" />
+              )}
+              <span className="hidden lg:inline text-[11px] font-medium text-foreground">Inject Demo Fault</span>
+            </button>
+          )}
+
           {/* Search */}
           <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted/50 border border-border text-muted-foreground">
             <Search className="h-3.5 w-3.5" />
@@ -94,19 +176,7 @@ export function TopBar() {
 
           {/* Backend status */}
           <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg">
-            {isLoading ? (
-              <span className="text-[10px] text-muted-foreground">connecting…</span>
-            ) : backendConnected ? (
-              <>
-                <Wifi className="h-3 w-3 text-status-healthy" />
-                <span className="text-[10px] text-status-healthy font-medium">Live</span>
-              </>
-            ) : (
-              <>
-                <WifiOff className="h-3 w-3 text-muted-foreground" />
-                <span className="text-[10px] text-muted-foreground">Demo</span>
-              </>
-            )}
+            {renderBackendStatus()}
           </div>
 
           {/* Activity feed button */}

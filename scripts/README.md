@@ -16,7 +16,7 @@ Setup, validation, and demo utility scripts. All scripts must be run from the `A
 | `phase7_demo_check.py` | Pre-demo health check. Verifies all external services, fallback files, and demo data are ready. Run immediately before presenting. Exit code 0 = green light. |
 | `check_checkpoints.py` | Inspects the LangGraph SQLite checkpoint database for threads with pending nodes. Use this to debug stuck incidents or verify the graph suspended correctly at the human review node. |
 | `test_ollama_qwen3.py` | Verifies Ollama is running and the qwen3-coder model responds correctly. Run this before wiring Ollama into the backend to confirm the model is working. |
-| `test_ollama_atlas_integration.py` | Integration test for the full Ollama-to-ATLAS reasoning path. Tests the LLM server endpoint with a real incident context payload. |
+| `test_ollama_atlas_integration.py` | Integration test for the full Ollama-to-ATLAS reasoning path. Tests the internal LLM reasoning endpoint with a real incident context payload. |
 | `test_resume_direct.py` | Direct pipeline resume test that bypasses the HTTP API. Used for debugging the LangGraph resume path without a running server. |
 
 ---
@@ -94,16 +94,13 @@ python scripts/validate_similarity.py
 # 6. Run the test suite
 python test_progress.py
 
-# 7. Start the LLM server (separate terminal)
-uvicorn backend.llm.cerebras_server:app --port 8001
-
-# 8. Start the backend (separate terminal)
+# 7. Start the backend (single-service mode also serves /internal/llm/reason)
 uvicorn backend.main:app --port 8000
 
-# 9. Run the demo
+# 8. Run the demo
 python scripts/trigger_financecore_e2e.py
 
-# 10. Approve the incident
+# 9. Approve the incident
 python scripts/test_resume.py
 ```
 

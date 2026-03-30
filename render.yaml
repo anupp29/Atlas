@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: atlas-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile.backend
+    autoDeploy: true
+    healthCheckPath: /api/playbooks
+
+    # Keep local state on a persistent disk if you are using local Chroma/SQLite paths.
+    disk:
+      name: atlas-data
+      mountPath: /var/lib/atlas
+      sizeGB: 10
+
+    envVars:
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USERNAME
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: SERVICENOW_INSTANCE_URL
+        sync: false
+      - key: SERVICENOW_USERNAME
+        sync: false
+      - key: SERVICENOW_PASSWORD
+        sync: false
+      - key: ATLAS_SECRET_KEY
+        sync: false
+
+      - key: CHROMADB_PATH
+        value: /var/lib/atlas/chromadb
+      - key: ATLAS_AUDIT_DB_PATH
+        value: /var/lib/atlas/audit.db
+      - key: ATLAS_DECISION_DB_PATH
+        value: /var/lib/atlas/decision_history.db
+      - key: ATLAS_CHECKPOINT_DB_PATH
+        value: /var/lib/atlas/checkpoints.db
+
+      - key: ATLAS_LLM_ENDPOINT
+        value: http://localhost:8000/internal/llm/reason
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: CEREBRAS_MODEL
+        value: qwen-3-235b-a22b-instruct-2507
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: OLLAMA_MODEL
+        value: qwen3-coder:480b-cloud
+
+      # Set this after frontend domain is known.
+      - key: ATLAS_FRONTEND_ORIGIN
+        sync: false

@@ -252,12 +252,98 @@ export interface RejectionResponse {
   reason: string;
 }
 
+export interface LogIngestPayload {
+  client_id: string;
+  source: string;
+  severity: string;
+  line: string;
+  timestamp?: string;
+}
+
+export interface LogIngestResponse {
+  status: string;
+}
+
 export function approveIncident(payload: ApprovalPayload): Promise<ApprovalResponse> {
   return atlasPost<ApprovalResponse>('/api/incidents/approve', payload);
 }
 
 export function rejectIncident(payload: RejectionPayload): Promise<RejectionResponse> {
   return atlasPost<RejectionResponse>('/api/incidents/reject', payload);
+}
+
+export function ingestLogLine(payload: LogIngestPayload): Promise<LogIngestResponse> {
+  return atlasPost<LogIngestResponse>('/api/logs/ingest', payload);
+}
+
+export async function injectFinanceCoreInstantFaultDemo(): Promise<{ sent: number }> {
+  const clientId = 'FINCORE_UK_001';
+  const timestamp = new Date().toISOString();
+
+  const lines: Array<Pick<LogIngestPayload, 'source' | 'severity' | 'line'>> = [
+    {
+      source: 'TransactionDB',
+      severity: 'ERROR',
+      line: `${timestamp} UTC [1260] FATAL:  remaining connection slots are reserved for non-replication superuser connections`,
+    },
+    {
+      source: 'TransactionDB',
+      severity: 'ERROR',
+      line: `${timestamp} UTC [1261] FATAL:  53300: too_many_connections - current count 198/200`,
+    },
+    {
+      source: 'TransactionDB',
+      severity: 'ERROR',
+      line: `${timestamp} UTC [1262] ERROR:  HikariPool-1 - Exception during pool initialization. com.zaxxer.hikari.pool.HikariPool$PoolInitializationException: Failed to initialize pool: FATAL: remaining connection slots are reserved`,
+    },
+    {
+      source: 'PaymentAPI',
+      severity: 'ERROR',
+      line: `${timestamp} INFO  [http-nio-8080-exec-3] c.f.payment.PaymentController - POST /api/v2/payments -> 503 Service Unavailable`,
+    },
+    {
+      source: 'PaymentAPI',
+      severity: 'ERROR',
+      line: `${timestamp} ERROR [http-nio-8080-exec-4] c.f.payment.PaymentService - Failed to acquire database connection after 30000ms`,
+    },
+    {
+      source: 'PaymentAPI',
+      severity: 'ERROR',
+      line: `${timestamp} ERROR [http-nio-8080-exec-5] c.f.payment.PaymentService - com.zaxxer.hikari.pool.HikariPool$PoolTimeoutException: HikariPool-1 - Connection is not available, request timed out after 30000ms.`,
+    },
+    {
+      source: 'PaymentAPI',
+      severity: 'ERROR',
+      line: `${timestamp} WARN  [http-nio-8080-exec-6] c.f.payment.PaymentController - Circuit breaker OPEN for TransactionDB - downstream unavailable`,
+    },
+    {
+      source: 'APIGateway',
+      severity: 'ERROR',
+      line: `${timestamp} ERROR [gateway] upstream_response_time=30.001 status=503 service=payment-api`,
+    },
+    {
+      source: 'APIGateway',
+      severity: 'ERROR',
+      line: `${timestamp} ERROR [gateway] circuit_breaker_state=OPEN service=payment-api consecutive_failures=5`,
+    },
+    {
+      source: 'APIGateway',
+      severity: 'ERROR',
+      line: `${timestamp} WARN  [gateway] health_check_failed service=payment-api endpoint=/actuator/health`,
+    },
+  ];
+
+  for (const entry of lines) {
+    await ingestLogLine({
+      client_id: clientId,
+      source: entry.source,
+      severity: entry.severity,
+      line: entry.line,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  return { sent: lines.length };
 }
 
 export function modifyIncident(payload: ModifyPayload): Promise<ApprovalResponse> {

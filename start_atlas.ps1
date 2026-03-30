@@ -66,10 +66,10 @@ if (-not (Test-Path "$Root\.env")) {
 }
 Write-Ok ".env    → found"
 
-# ui-atlas/node_modules
-if (-not (Test-Path "$Root\ui-atlas\node_modules")) {
-    Write-Warn "ui-atlas/node_modules missing — running npm install..."
-    Push-Location "$Root\ui-atlas"
+# ui/node_modules
+if (-not (Test-Path "$Root\ui\node_modules")) {
+    Write-Warn "ui/node_modules missing — running npm install..."
+    Push-Location "$Root\ui"
     npm install --silent
     Pop-Location
     Write-Ok "npm install complete"
@@ -99,7 +99,7 @@ $tabs.Add(@{
 
 $tabs.Add(@{
     Title = "ATLAS Frontend"
-    Dir   = "$Root\ui-atlas"
+    Dir   = "$Root\ui"
     Cmd   = "npm run dev -- --port $FrontendPort"
     Color = "oneHalfDark"
 })

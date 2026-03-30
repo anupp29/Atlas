@@ -4,6 +4,7 @@ ATLAS Health Check — verifies all services are reachable before a demo.
 Usage:
     python scripts/health_check.py
     python scripts/health_check.py --wait   # poll until all services are up
+    python scripts/health_check.py --client-id FINCORE_UK_001
 """
 
 from __future__ import annotations
@@ -16,44 +17,72 @@ import urllib.error
 import json
 from datetime import datetime, timezone
 
-SERVICES = [
-    {
-        "name": "ATLAS Backend",
-        "url": "http://localhost:8000/docs",
-        "method": "GET",
-        "expect_status": 200,
-        "critical": True,
-    },
-    {
-        "name": "LLM Endpoint",
-        "url": "http://localhost:8000/docs",
-        "method": "GET",
-        # Just verify the server is up — actual LLM call requires Cerebras key
-        "expect_status": 200,
-        "critical": False,
-    },
-    {
-        "name": "Mock PaymentAPI",
-        "url": "http://localhost:8001/actuator/health",
-        "method": "GET",
-        "expect_status": 200,
-        "critical": False,
-    },
-    {
-        "name": "Frontend (Vite)",
-        "url": "http://localhost:5173",
-        "method": "GET",
-        "expect_status": 200,
-        "critical": False,
-    },
-    {
-        "name": "Active Incidents API",
-        "url": "http://localhost:8000/api/incidents/active",
-        "method": "GET",
-        "expect_status": 200,
-        "critical": True,
-    },
-]
+DEFAULT_BACKEND_URL = "http://localhost:8000"
+DEFAULT_FRONTEND_URL = "http://localhost:5173"
+DEFAULT_PAYMENT_API_URL = "http://localhost:8001"
+DEFAULT_CLIENT_ID = "FINCORE_UK_001"
+
+
+def build_services(
+    backend_url: str,
+    frontend_url: str,
+    payment_api_url: str,
+    client_id: str,
+) -> list[dict]:
+    """Build service checks using the current API surface."""
+    return [
+        {
+            "name": "ATLAS API Docs",
+            "url": f"{backend_url}/docs",
+            "method": "GET",
+            "expect_status": 200,
+            "critical": True,
+        },
+        {
+            "name": "Active Incidents API",
+            "url": f"{backend_url}/api/incidents/active?client_id={client_id}",
+            "method": "GET",
+            "expect_status": 200,
+            "critical": True,
+        },
+        {
+            "name": "Playbook Library API",
+            "url": f"{backend_url}/api/playbooks",
+            "method": "GET",
+            "expect_status": 200,
+            "critical": True,
+        },
+        {
+            "name": "Trust API",
+            "url": f"{backend_url}/api/trust/{client_id}",
+            "method": "GET",
+            "expect_status": 200,
+            "critical": True,
+        },
+        {
+            "name": "Internal LLM Route",
+            "url": f"{backend_url}/internal/llm/reason",
+            "method": "POST",
+            # Empty object should fail validation quickly if route is present.
+            "body": {},
+            "expect_status": 422,
+            "critical": False,
+        },
+        {
+            "name": "Mock PaymentAPI",
+            "url": f"{payment_api_url}/actuator/health",
+            "method": "GET",
+            "expect_status": 200,
+            "critical": False,
+        },
+        {
+            "name": "Frontend (Vite)",
+            "url": frontend_url,
+            "method": "GET",
+            "expect_status": 200,
+            "critical": False,
+        },
+    ]
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"
@@ -92,41 +121,52 @@ def check_service(svc: dict) -> tuple[bool, str]:
         return False, str(e)
 
 
-def run_checks(wait: bool = False, timeout_s: int = 120) -> bool:
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    print(f"\n  {CYAN}{BOLD}ATLAS Health Check{RESET}  {GRAY}{ts}{RESET}")
-    print(f"  {'─' * 50}")
+def _status_icon(ok: bool, critical: bool, wait_mode: bool = False) -> str:
+    """Render service status icon for normal and wait modes."""
+    if ok:
+        return f"{GREEN}✓{RESET}"
+    if wait_mode:
+        return f"{YELLOW}…{RESET}"
+    if critical:
+        return f"{RED}✗{RESET}"
+    return f"{YELLOW}⚠{RESET}"
 
-    if not wait:
-        all_ok = True
-        for svc in SERVICES:
-            ok, detail = check_service(svc)
-            icon = f"{GREEN}✓{RESET}" if ok else (f"{YELLOW}⚠{RESET}" if not svc["critical"] else f"{RED}✗{RESET}")
-            label = svc["name"].ljust(24)
-            print(f"  {icon}  {label}  {GRAY}{detail}{RESET}")
-            if not ok and svc["critical"]:
-                all_ok = False
-        print()
-        return all_ok
 
-    # Wait mode — poll until all critical services are up or timeout
+def _run_once(services: list[dict]) -> bool:
+    """Execute one pass of checks and print status lines."""
+    all_ok = True
+    for svc in services:
+        ok, detail = check_service(svc)
+        icon = _status_icon(ok, svc["critical"])
+        label = svc["name"].ljust(24)
+        print(f"  {icon}  {label}  {GRAY}{detail}{RESET}")
+        if not ok and svc["critical"]:
+            all_ok = False
+    print()
+    return all_ok
+
+
+def _run_wait_loop(services: list[dict], timeout_s: int) -> bool:
+    """Poll checks until all critical services are up or timeout expires."""
     deadline = time.monotonic() + timeout_s
     attempt = 0
+
     while time.monotonic() < deadline:
         attempt += 1
         all_critical_ok = True
-        results = []
-        for svc in SERVICES:
+        results: list[tuple[dict, bool, str]] = []
+
+        for svc in services:
             ok, detail = check_service(svc)
             results.append((svc, ok, detail))
             if not ok and svc["critical"]:
                 all_critical_ok = False
 
-        # Print status on first attempt and every 10s
+        # Print status on first attempt and every ~30s (10 x 3s poll)
         if attempt == 1 or attempt % 10 == 0:
             print(f"\n  {GRAY}Attempt {attempt} — {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}{RESET}")
             for svc, ok, detail in results:
-                icon = f"{GREEN}✓{RESET}" if ok else f"{YELLOW}…{RESET}"
+                icon = _status_icon(ok, svc["critical"], wait_mode=True)
                 print(f"  {icon}  {svc['name'].ljust(24)}  {GRAY}{detail}{RESET}")
 
         if all_critical_ok:
@@ -139,11 +179,47 @@ def run_checks(wait: bool = False, timeout_s: int = 120) -> bool:
     return False
 
 
+def run_checks(
+    wait: bool = False,
+    timeout_s: int = 120,
+    backend_url: str = DEFAULT_BACKEND_URL,
+    frontend_url: str = DEFAULT_FRONTEND_URL,
+    payment_api_url: str = DEFAULT_PAYMENT_API_URL,
+    client_id: str = DEFAULT_CLIENT_ID,
+) -> bool:
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    print(f"\n  {CYAN}{BOLD}ATLAS Health Check{RESET}  {GRAY}{ts}{RESET}")
+    print(f"  {'─' * 50}")
+    services = build_services(
+        backend_url=backend_url,
+        frontend_url=frontend_url,
+        payment_api_url=payment_api_url,
+        client_id=client_id,
+    )
+
+    if not wait:
+        return _run_once(services)
+
+    # Wait mode — poll until all critical services are up or timeout.
+    return _run_wait_loop(services, timeout_s)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ATLAS service health check")
     parser.add_argument("--wait", action="store_true", help="Poll until all critical services are up (max 120s)")
     parser.add_argument("--timeout", type=int, default=120, help="Timeout in seconds for --wait mode")
+    parser.add_argument("--backend-url", default=DEFAULT_BACKEND_URL, help=f"Backend base URL (default: {DEFAULT_BACKEND_URL})")
+    parser.add_argument("--frontend-url", default=DEFAULT_FRONTEND_URL, help=f"Frontend URL (default: {DEFAULT_FRONTEND_URL})")
+    parser.add_argument("--payment-api-url", default=DEFAULT_PAYMENT_API_URL, help=f"Mock PaymentAPI base URL (default: {DEFAULT_PAYMENT_API_URL})")
+    parser.add_argument("--client-id", default=DEFAULT_CLIENT_ID, help=f"Client ID used by client-scoped endpoints (default: {DEFAULT_CLIENT_ID})")
     args = parser.parse_args()
 
-    ok = run_checks(wait=args.wait, timeout_s=args.timeout)
+    ok = run_checks(
+        wait=args.wait,
+        timeout_s=args.timeout,
+        backend_url=args.backend_url,
+        frontend_url=args.frontend_url,
+        payment_api_url=args.payment_api_url,
+        client_id=args.client_id,
+    )
     sys.exit(0 if ok else 1)
