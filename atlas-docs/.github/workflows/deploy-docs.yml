@@ -13,7 +13,6 @@ copyright: Copyright &copy; Atos — ATLAS Platform
 
 theme:
   name: material
-  custom_dir: overrides
   icon:
     logo: material/shield-check
     repo: fontawesome/brands/github
