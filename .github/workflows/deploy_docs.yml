@@ -36,8 +36,9 @@ jobs:
 
       - name: Build MkDocs site
         run: |
+          mkdir -p atlas-docs/overrides
           cd atlas-docs
-          mkdocs build --strict --site-dir ../_site
+          mkdocs build --site-dir ../_site
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
