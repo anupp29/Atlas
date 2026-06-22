@@ -3,13 +3,13 @@ site_description: >-
   ATLAS — Autonomous AIOps platform for Managed Service Providers.
   Detects failures before users notice, finds root cause in seconds,
   and resolves incidents autonomously under governed, auditable control.
-site_author: Atos — ATLAS Engineering
+site_author: ATLAS Engineering
 site_url: https://YOUR-ORG.github.io/Atlas/
 repo_name: Atlas
 repo_url: https://github.com/YOUR-ORG/Atlas
 edit_uri: edit/main/docs/
 
-copyright: Copyright &copy; Atos — ATLAS Platform
+copyright: Copyright &copy; ATLAS Platform
 
 theme:
   name: material

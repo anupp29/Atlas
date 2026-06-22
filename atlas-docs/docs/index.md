@@ -132,6 +132,6 @@ flowchart LR
 
 ---
 
-*ATLAS is built by Atos as an AIOps platform for Managed Service Provider (MSP)
+*ATLAS is built by DHE as an AIOps platform for Managed Service Provider (MSP)
 environments. This documentation reflects the current state of the codebase in this
 repository.*

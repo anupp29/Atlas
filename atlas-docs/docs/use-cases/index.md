@@ -9,7 +9,7 @@ same underlying system.
 | **L1 — Service Desk Engineer** | Fast, clear guidance across many simultaneous incidents, without needing deep expertise in every technology. |
 | **L2 — Technical Support Engineer** | Full investigation context, instead of re-solving an incident a departed colleague already solved once. |
 | **L3 — Deep Technical Architect** | Engagement only on genuinely novel or P1 incidents — their time and judgement preserved as institutional knowledge. |
-| **The Atos Client** | A real-time view of what's happening in their own environment, without having to call the SDM to find out. |
+| **The MSP Client** | A real-time view of what's happening in their own environment, without having to call the SDM to find out. |
 
 ---
 

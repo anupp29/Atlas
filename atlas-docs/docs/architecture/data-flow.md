@@ -11,7 +11,7 @@ ATLAS's **Input → Process → Output** model.
 
     | Source | Description |
     |---|---|
-    | **Atos Delivery Team** | No-code configuration: declares the technology stack, selects applicable compliance frameworks, and sets thresholds for a client (Layer 0). |
+    | **MSP Delivery Team** | No-code configuration: declares the technology stack, selects applicable compliance frameworks, and sets thresholds for a client (Layer 0). |
     | **Client applications — live data** | Three ingestion paths run concurrently: Path A (modern apps via OTel SDK), Path B (legacy systems via purpose-built adapters), Path C (existing infrastructure via API pull). |
     | **Kafka streaming backbone** | All events are timestamped, normalised to a unified OTel schema, and stored in hot + cold tiers for both live correlation and historical replay. |
 
